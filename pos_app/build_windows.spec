@@ -47,8 +47,7 @@ exe = EXE(
     name='APA_POS',
     debug=False, strip=False, upx=True,
     console=False,                   # no black terminal window
-    icon='assets/apa-app-logo.ico',  # convert PNG→ICO before building
-                                     # e.g. with https://convertio.co or Paint
+    icon=os.path.join(os.path.abspath('.'), 'assets', 'apa-app-logo.ico'),
 )
 
 coll = COLLECT(
