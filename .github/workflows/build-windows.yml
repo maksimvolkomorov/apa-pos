@@ -1,0 +1,45 @@
+name: Build Windows App
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller
+          pip install -r pos_app/requirements.txt
+
+      - name: Convert PNG icon to ICO
+        run: |
+          python -c "
+          from PIL import Image
+          img = Image.open('pos_app/assets/apa-app-logo.png')
+          img.save('pos_app/assets/apa-app-logo.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(32,32),(16,16)])
+          "
+
+      - name: Build with PyInstaller
+        working-directory: pos_app
+        run: pyinstaller build_windows.spec
+
+      - name: Zip output
+        run: Compress-Archive -Path pos_app/dist/APA_POS -DestinationPath APA_POS-windows.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: APA_POS-windows
+          path: APA_POS-windows.zip
+          retention-days: 30
