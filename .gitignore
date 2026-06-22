@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+pos_app/pos.db
+pos_app/db/archives/
+
+# Generated outputs
+pos_app/assets/barcodes/
+pos_app/assets/receipts/
+
+# PyInstaller
+pos_app/build/
+pos_app/dist/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Accidental config artefact
+pos_app/*.USB*
