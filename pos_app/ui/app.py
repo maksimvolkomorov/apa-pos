@@ -22,7 +22,10 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("APA@POS")
-        self.geometry("1024x768")
+        # Fit within the available screen height (accounts for taskbar).
+        screen_h = self.winfo_screenheight()
+        win_h = min(768, screen_h - 60)
+        self.geometry(f"1024x{win_h}")
         self.resizable(False, False)
         self.configure(bg=BG)
         self._set_icon()

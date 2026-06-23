@@ -6,6 +6,14 @@ import traceback
 # Ensure pos_app/ is on the path so all modules resolve correctly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Tell Windows to use the real physical DPI so Tkinter sizes match the screen.
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
 
 def _fatal(msg: str) -> None:
     """Show a startup error and exit. Works before Tk is initialised."""
