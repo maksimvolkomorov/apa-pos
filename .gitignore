@@ -19,5 +19,5 @@ pos_app/dist/
 .DS_Store
 **/.DS_Store
 
-# Accidental config artefact
-pos_app/*.USB*
+# Windows device paths
+pos_app/\\.\USB*
