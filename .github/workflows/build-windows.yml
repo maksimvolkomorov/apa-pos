@@ -2,6 +2,11 @@ name: Build Windows App
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v1.0.0)"
+        required: true
+        default: "v1.0.0"
 
 jobs:
   build-windows:
@@ -32,9 +37,12 @@ jobs:
         working-directory: pos_app
         run: pyinstaller build_windows.spec
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Zip output
+        run: Compress-Archive -Path pos_app/dist/APA_POS -DestinationPath APA_POS-windows.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: APA_POS-windows
-          path: pos_app/dist/APA_POS
-          retention-days: 30
+          tag_name: ${{ github.event.inputs.version }}
+          name: APA@POS ${{ github.event.inputs.version }}
+          files: APA_POS-windows.zip
