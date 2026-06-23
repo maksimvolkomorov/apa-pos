@@ -140,6 +140,7 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
 
     header = (
         "^XA\n"
+        "^MNC\n"                    # continuous media (no gaps) for thermal tape
         f"^PW{_ZPL_WIDTH_DOTS}\n"
         f"^LL{label_height}\n"
         "^CI28\n"           # UTF-8

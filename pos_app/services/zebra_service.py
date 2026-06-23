@@ -22,6 +22,7 @@ def build_product_zpl(name: str, barcode: str) -> str:
 
     return (
         "^XA\n"
+        "^MNN\n"             # non-continuous media (gap/web sensing) for label stock
         "^PW812\n"           # print width: 4 in = 812 dots
         "^LL305\n"           # label length: ~1.5 in = 305 dots
         "^CI28\n"            # UTF-8 encoding
