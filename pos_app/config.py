@@ -31,11 +31,11 @@ LOW_STOCK_THRESHOLD = 5
 WINDOW_WIDTH        = 1920
 WINDOW_HEIGHT       = 1080
 RECEIPT_MODE        = "pdf"
-STORE_NAME          = "St. Herman Monastery"
+STORE_NAME          = "Store name"
 STORE_ADDRESS       = [
-    "123 Main Street",
-    "City, ST 00000",
-    "Tel: (000) 000-0000",
+    "1234 Main Street",
+    "City, CA 00000",
+    "000-000-0000",
 ]
 ADMIN_PIN           = "1234"
 RESET_DB            = False
