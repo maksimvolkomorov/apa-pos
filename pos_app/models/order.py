@@ -60,7 +60,7 @@ def item_count(order_id: int) -> int:
 
 # ── Mutations ─────────────────────────────────────────────────────────────────
 
-def create(items: list[dict]) -> dict:
+def create(items: list[dict], processed_by: str | None = None) -> dict:
     """
     Create an order and atomically decrement stock.
 
@@ -92,7 +92,8 @@ def create(items: list[dict]) -> dict:
 
     with conn:
         cur.execute(
-            "INSERT INTO orders (total, created_at) VALUES (?, ?)", (total, now)
+            "INSERT INTO orders (total, processed_by, created_at) VALUES (?, ?, ?)",
+            (total, processed_by or None, now),
         )
         order_id = cur.lastrowid
         for item in items:

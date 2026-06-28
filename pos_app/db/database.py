@@ -77,6 +77,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _migrate_order_items_snapshot(conn)
     _migrate_products_v3(conn)
     _migrate_products_v4(conn)
+    _migrate_v5(conn)
 
 
 def _migrate_products_v3(conn: sqlite3.Connection) -> None:
@@ -93,6 +94,21 @@ def _migrate_products_v3(conn: sqlite3.Connection) -> None:
     for col in ("author", "publisher", "webstore", "location"):
         if col not in cols:
             conn.execute(f"ALTER TABLE products ADD COLUMN {col} TEXT")
+    conn.commit()
+
+
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    """v5: add users table and processed_by column on orders."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL UNIQUE,
+            created_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(orders)")}
+    if "processed_by" not in cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN processed_by TEXT")
     conn.commit()
 
 

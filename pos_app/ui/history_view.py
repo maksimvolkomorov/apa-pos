@@ -57,10 +57,10 @@ class HistoryView(tk.Frame):
         styled_button(top, "Clear",  self._clear_filter).pack(side="left", padx=2)
 
         # Table
-        cols   = ("ID", "Date / Time", "Items", "Total")
-        widths = (65, 200, 80, 130)
+        cols   = ("ID", "Date / Time", "Items", "Total", "By")
+        widths = (65, 200, 80, 130, 120)
         tv_frame, self._tv = make_treeview(self._list_panel, cols, widths,
-                                           left_cols=("Date / Time", "Total"),
+                                           left_cols=("Date / Time", "Total", "By"),
                                            right_cols=())
         tv_frame.pack(fill="both", expand=True, padx=12, pady=4)
         self._tv.bind("<Double-1>", lambda e: self._view_details())
@@ -146,6 +146,7 @@ class HistoryView(tk.Frame):
                 fmt_dt(o["created_at"]),
                 count,
                 f"{sym}{o['total']:.2f}",
+                o.get("processed_by") or "—",
             ))
 
         self._pager.set_total(len(rows))
@@ -180,6 +181,9 @@ class HistoryView(tk.Frame):
             w.destroy()
         total_qty = sum(i["quantity"] for i in items)
         tk.Label(self._detail_meta, text=f"Items: {total_qty}",
+                 bg=BG, font=("Helvetica", 10)).pack(anchor="w")
+        by = order.get("processed_by") or "—"
+        tk.Label(self._detail_meta, text=f"Processed by: {by}",
                  bg=BG, font=("Helvetica", 10)).pack(anchor="w")
 
         # Populate items table

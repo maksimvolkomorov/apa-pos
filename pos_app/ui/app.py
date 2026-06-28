@@ -22,6 +22,7 @@ from ui.stock_view import StockView
 from ui.pos_view import POSView
 from ui.history_view import HistoryView
 from ui.import_export_view import ImportExportView
+from ui.users_view import UsersView
 
 
 class App(tk.Tk):
@@ -30,6 +31,7 @@ class App(tk.Tk):
         ("POS / New Order",  POSView),
         ("Order History",    HistoryView),
         ("Import / Export",  ImportExportView),
+        ("Users",            UsersView),
     ]
 
     def __init__(self):

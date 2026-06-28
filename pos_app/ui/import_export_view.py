@@ -21,9 +21,6 @@ class ImportExportView(tk.Frame):
         super().__init__(parent, bg=BG)
         self._build()
 
-    def on_show(self):
-        pass
-
     # ── Layout ────────────────────────────────────────────────────────────────
 
     def _build(self):
@@ -96,6 +93,9 @@ class ImportExportView(tk.Frame):
         self._export_status = tk.Label(parent, text="", bg=BG,
                                         font=("Helvetica", 9), fg=FG_MUTED)
         self._export_status.pack(anchor="w", pady=(6, 0))
+
+    def on_show(self):
+        pass
 
     # ── Import ────────────────────────────────────────────────────────────────
 

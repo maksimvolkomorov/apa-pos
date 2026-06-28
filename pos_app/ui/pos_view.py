@@ -5,6 +5,7 @@ from tkinter import messagebox, ttk
 import config
 from models import product as product_model
 from models import order as order_model
+from models import user as user_model
 from services import receipt_service
 from ui.theme import (
     BG, TROW_ALT, BTN_DNG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
@@ -323,10 +324,56 @@ class POSView(tk.Frame):
             self._order.clear()
             self._refresh_tv()
 
+    def _ask_processed_by(self) -> str | None:
+        """Show a modal asking who is processing the order. Returns name or None."""
+        users = user_model.get_all()
+        if not users:
+            return None
+
+        result = [None]
+        dlg = tk.Toplevel(self, bg=BG)
+        dlg.title("Processed by")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="Who is processing this order?",
+                 bg=BG, font=("Helvetica", 11)).pack(padx=24, pady=(20, 10))
+
+        from tkinter import ttk
+        names = [u["name"] for u in users]
+        var = tk.StringVar(value=names[0])
+        cb = ttk.Combobox(dlg, textvariable=var, values=names,
+                          state="readonly", font=("Helvetica", 11), width=22)
+        cb.pack(padx=24, pady=(0, 16))
+
+        def _confirm():
+            result[0] = var.get() or None
+            dlg.destroy()
+
+        def _cancel():
+            result[0] = "CANCEL"
+            dlg.destroy()
+
+        btn_row = tk.Frame(dlg, bg=BG)
+        btn_row.pack(pady=(0, 16))
+        styled_button(btn_row, "Cancel",   _cancel).pack(side="left", padx=6)
+        styled_button(btn_row, "Complete", _confirm, bg=BTN_OK).pack(side="left", padx=6)
+
+        dlg.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width()  - dlg.winfo_width())  // 2
+        y = self.winfo_rooty() + (self.winfo_height() - dlg.winfo_height()) // 2
+        dlg.geometry(f"+{x}+{y}")
+        self.wait_window(dlg)
+        return result[0]
+
     def _checkout(self):
         if not self._order:
             messagebox.showwarning("Empty Order",
                                    "Add at least one item before checkout.")
+            return
+
+        processed_by = self._ask_processed_by()
+        if processed_by == "CANCEL":
             return
 
         items = [
@@ -339,7 +386,7 @@ class POSView(tk.Frame):
         ]
 
         try:
-            new_order = order_model.create(items)
+            new_order = order_model.create(items, processed_by=processed_by)
         except ValueError as exc:
             messagebox.showerror("Checkout Failed", str(exc))
             return

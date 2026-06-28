@@ -12,10 +12,17 @@ CREATE TABLE IF NOT EXISTS products (
     created_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS orders (
+CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    total      REAL    NOT NULL,
+    name       TEXT    NOT NULL UNIQUE,
     created_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    total        REAL    NOT NULL,
+    processed_by TEXT,
+    created_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS order_items (
