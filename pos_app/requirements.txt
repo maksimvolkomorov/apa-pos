@@ -4,6 +4,7 @@
 python-barcode[images]   # Code128 PNG generation (fallback built-in if absent)
 Pillow                   # required by python-barcode ImageWriter
 reportlab                # optional — PDF receipts (plain .txt used if absent)
+openpyxl                 # xlsx import/export
 
 # Tkinter and sqlite3 ship with the Python standard library.
 # On macOS install python-tk separately:  brew install python-tk@3.12

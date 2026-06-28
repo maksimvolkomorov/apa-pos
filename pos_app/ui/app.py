@@ -21,6 +21,7 @@ from ui.theme import NAV_BG, NAV_ACT, BG, styled_button
 from ui.stock_view import StockView
 from ui.pos_view import POSView
 from ui.history_view import HistoryView
+from ui.import_export_view import ImportExportView
 
 
 class App(tk.Tk):
@@ -28,6 +29,7 @@ class App(tk.Tk):
         ("Stock Management", StockView),
         ("POS / New Order",  POSView),
         ("Order History",    HistoryView),
+        ("Import / Export",  ImportExportView),
     ]
 
     def __init__(self):

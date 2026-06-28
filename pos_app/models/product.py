@@ -86,6 +86,45 @@ def update(product_id: int, title: str, stock: int, price: float, *,
     return get_by_id(product_id)
 
 
+def import_product(title: str, stock: int, price: float, *,
+                   product_id: int | None = None,
+                   barcode: str | None = None,
+                   author: str = "", publisher: str = "",
+                   webstore: str = "", location: str = "",
+                   storage: int | None = None) -> dict:
+    """Insert a product preserving explicit id/barcode when provided (import use-case)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    if product_id is not None:
+        actual_barcode = barcode or _make_barcode(product_id)
+        cur.execute(
+            "INSERT INTO products"
+            " (id, title, author, publisher, webstore, location, storage, barcode, stock, price)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (product_id, title, author or None, publisher or None,
+             webstore or None, location or None, storage,
+             actual_barcode, stock, price),
+        )
+    else:
+        actual_barcode = barcode
+        temp = f"__pending_{uuid.uuid4().hex}"
+        cur.execute(
+            "INSERT INTO products"
+            " (title, author, publisher, webstore, location, storage, barcode, stock, price)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (title, author or None, publisher or None,
+             webstore or None, location or None, storage,
+             actual_barcode or temp, stock, price),
+        )
+        if actual_barcode is None:
+            new_id = cur.lastrowid
+            actual_barcode = _make_barcode(new_id)
+            cur.execute("UPDATE products SET barcode = ? WHERE id = ?",
+                        (actual_barcode, new_id))
+    conn.commit()
+    return get_by_id(cur.lastrowid)
+
+
 def update_stock(product_id: int, delta: int) -> None:
     conn = get_connection()
     conn.execute(
