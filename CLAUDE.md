@@ -11,13 +11,13 @@ APA@POS is a desktop Point of Sale application for St. Herman Monastery. Built w
 ```bash
 cd pos_app
 pip install -r requirements.txt
-python main.py
+py main.py
 ```
 
 Seed the database with sample products and orders:
 ```bash
 cd pos_app
-python seed.py
+py seed.py
 ```
 
 ## Building for Windows
@@ -29,7 +29,7 @@ To build locally on Windows:
 cd pos_app
 pip install pyinstaller
 # Convert PNG to ICO first (Pillow required):
-python -c "from PIL import Image; img = Image.open('assets/apa-app-logo.png'); img.save('assets/apa-app-logo.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(32,32),(16,16)])"
+py -c "from PIL import Image; img = Image.open('assets/apa-app-logo.png'); img.save('assets/apa-app-logo.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(32,32),(16,16)])"
 pyinstaller build_windows.spec
 ```
 

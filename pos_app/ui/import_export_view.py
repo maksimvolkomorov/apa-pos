@@ -17,9 +17,12 @@ def _load_cfg() -> dict:
 
 
 class ImportExportView(tk.Frame):
+    PIN_PROTECTED = True
+
     def __init__(self, parent):
         super().__init__(parent, bg=BG)
         self._build()
+
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -67,6 +70,8 @@ class ImportExportView(tk.Frame):
                        variable=self._replace_var,
                        bg=BG, font=("Helvetica", 10),
                        activebackground=BG).pack(side="left")
+        tk.Label(opt_row, text="⚠ This will permanently delete ALL existing products",
+                 bg=BG, font=("Helvetica", 9), fg="#C0392B").pack(side="left", padx=(10, 0))
 
         btn_row = tk.Frame(parent, bg=BG)
         btn_row.pack(anchor="w", pady=(12, 0))
@@ -94,9 +99,6 @@ class ImportExportView(tk.Frame):
                                         font=("Helvetica", 9), fg=FG_MUTED)
         self._export_status.pack(anchor="w", pady=(6, 0))
 
-    def on_show(self):
-        pass
-
     # ── Import ────────────────────────────────────────────────────────────────
 
     def _browse_import(self):
@@ -113,19 +115,15 @@ class ImportExportView(tk.Frame):
     def _preview_import(self, path: str):
         try:
             import openpyxl
-            cfg = _load_cfg()["import"]
+            full_cfg  = _load_cfg()
+            imp_cfg   = full_cfg["import"]
+            col_cfg   = full_cfg["columns"]
             wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-            if cfg["sheet"] not in wb.sheetnames:
-                self._import_status.config(
-                    text=f"Sheet \"{cfg['sheet']}\" not found. Available: {', '.join(wb.sheetnames)}",
-                    fg="#C00000")
-                self._import_btn.config(state="disabled")
-                return
-
-            ws = wb[cfg["sheet"]]
-            col_map = self._build_col_index(ws, cfg)
+            ws = wb.worksheets[0]
+            hrow = self._detect_header_row(ws, col_cfg, imp_cfg["header_row"])
+            col_map = self._build_col_index(ws, col_cfg, hrow)
             total, no_price = 0, 0
-            for row in ws.iter_rows(min_row=cfg["header_row"] + 1, values_only=True):
+            for row in ws.iter_rows(min_row=hrow + 1, values_only=True):
                 title_idx = col_map.get("title")
                 if title_idx is None or not row[title_idx]:
                     continue
@@ -135,7 +133,7 @@ class ImportExportView(tk.Frame):
                     no_price += 1
             wb.close()
 
-            warn = f"  |  {no_price} rows missing price (will default to {cfg['default_price']})" if no_price else ""
+            warn = f"  |  {no_price} rows missing price (will default to {imp_cfg['default_price']})" if no_price else ""
             self._import_status.config(
                 text=f"Ready: {total} products found{warn}", fg="#007000")
         except Exception as exc:
@@ -159,14 +157,17 @@ class ImportExportView(tk.Frame):
     def _do_import(self, path: str, replace: bool):
         try:
             import openpyxl
-            cfg = _load_cfg()["import"]
+            full_cfg  = _load_cfg()
+            imp_cfg   = full_cfg["import"]
+            col_cfg   = full_cfg["columns"]
             wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-            ws = wb[cfg["sheet"]]
-            col_map = self._build_col_index(ws, cfg)
-            default_price = float(cfg.get("default_price", 0.0))
+            ws = wb.worksheets[0]
+            hrow = self._detect_header_row(ws, col_cfg, imp_cfg["header_row"])
+            col_map = self._build_col_index(ws, col_cfg, hrow)
+            default_price = float(imp_cfg.get("default_price", 0.0))
 
             rows = []
-            for row in ws.iter_rows(min_row=cfg["header_row"] + 1, values_only=True):
+            for row in ws.iter_rows(min_row=hrow + 1, values_only=True):
                 t_idx = col_map.get("title")
                 if t_idx is None or not row[t_idx]:
                     continue
@@ -272,16 +273,16 @@ class ImportExportView(tk.Frame):
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
 
-        cfg = _load_cfg()["export"]
-        col_cfg = cfg["columns"]   # field → header label
-        fields  = list(col_cfg.keys())
-        headers = list(col_cfg.values())
+        full_cfg = _load_cfg()
+        col_cfg  = full_cfg["columns"]
+        fields   = list(col_cfg.keys())
+        headers  = list(col_cfg.values())
 
         products = product_model.get_all()
 
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = cfg.get("sheet", "Products")
+        ws.title = full_cfg["export"].get("sheet", "Products")
 
         hdr_fill = PatternFill("solid", fgColor="2E6DA4")
         hdr_font = Font(color="FFFFFF", bold=True)
@@ -307,23 +308,31 @@ class ImportExportView(tk.Frame):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _build_col_index(self, ws, cfg: dict) -> dict[str, int]:
+    def _detect_header_row(self, ws, col_cfg: dict, fallback: int) -> int:
+        """Return the first row (1-based) that contains a recognised column header."""
+        expected = {v.strip().upper() for v in col_cfg.values()}
+        for i, row in enumerate(ws.iter_rows(min_row=1, max_row=10, values_only=True), 1):
+            cells = {str(c).strip().upper() for c in row if c is not None}
+            if expected & cells:
+                return i
+        return fallback
+
+    def _build_col_index(self, ws, col_cfg: dict, hrow: int) -> dict[str, int]:
         """Map field name → 0-based column index by matching header row values."""
-        header_row = list(ws.iter_rows(
-            min_row=cfg["header_row"], max_row=cfg["header_row"],
-            values_only=True,
-        ))[0]
+        rows = list(ws.iter_rows(min_row=hrow, max_row=hrow, values_only=True))
+        if not rows:
+            return {}
+        header_row = rows[0]
         name_to_idx = {
             str(v).strip().upper(): i
             for i, v in enumerate(header_row)
             if v is not None
         }
-        result = {}
-        for field, col_label in cfg["columns"].items():
-            key = col_label.strip().upper()
-            if key in name_to_idx:
-                result[field] = name_to_idx[key]
-        return result
+        return {
+            field: name_to_idx[col_label.strip().upper()]
+            for field, col_label in col_cfg.items()
+            if col_label.strip().upper() in name_to_idx
+        }
 
     def _log_msg(self, text: str):
         def _do():

@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Runtime config (deployment-specific, created on first launch)
+pos_app/config.ini
+
 # Database
 pos_app/pos.db
 pos_app/db/archives/

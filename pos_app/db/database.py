@@ -1,5 +1,5 @@
+import configparser
 import os
-import re
 import shutil
 import sqlite3
 from datetime import datetime
@@ -49,24 +49,14 @@ def _reset_database() -> None:
 
 
 def _toggle_reset_flag(value: bool) -> None:
-    """Rewrite the RESET_DB line in config.py."""
-    config_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "config.py")
-    )
-    with open(config_path, encoding="utf-8") as fh:
-        src = fh.read()
-
-    new_src = re.sub(
-        r"^RESET_DB\s*=\s*(True|False)",
-        f"RESET_DB = {value}",
-        src,
-        flags=re.MULTILINE,
-    )
-
-    with open(config_path, "w", encoding="utf-8") as fh:
-        fh.write(new_src)
-
-    # Keep the in-process config in sync
+    """Write the reset_db flag back to config.ini."""
+    cp = configparser.ConfigParser()
+    cp.read(config._INI_PATH, encoding="utf-8")
+    if not cp.has_section("database"):
+        cp.add_section("database")
+    cp.set("database", "reset_db", str(value).lower())
+    with open(config._INI_PATH, "w", encoding="utf-8") as fh:
+        cp.write(fh)
     config.RESET_DB = value
 
 
@@ -78,6 +68,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _migrate_products_v3(conn)
     _migrate_products_v4(conn)
     _migrate_v5(conn)
+    _migrate_v6(conn)
+    _migrate_v7(conn)
+    _migrate_v8(conn)
 
 
 def _migrate_products_v3(conn: sqlite3.Connection) -> None:
@@ -95,6 +88,24 @@ def _migrate_products_v3(conn: sqlite3.Connection) -> None:
         if col not in cols:
             conn.execute(f"ALTER TABLE products ADD COLUMN {col} TEXT")
     conn.commit()
+
+
+def _migrate_v7(conn: sqlite3.Connection) -> None:
+    """v7: add payment_method and customer_name to orders."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(orders)")}
+    if "payment_method" not in cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cash'")
+    if "customer_name" not in cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN customer_name TEXT")
+    conn.commit()
+
+
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    """v6: add discount_pct column to orders."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(orders)")}
+    if "discount_pct" not in cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN discount_pct REAL NOT NULL DEFAULT 0")
+        conn.commit()
 
 
 def _migrate_v5(conn: sqlite3.Connection) -> None:
@@ -117,6 +128,14 @@ def _migrate_products_v4(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
     if "storage" not in cols:
         conn.execute("ALTER TABLE products ADD COLUMN storage INTEGER")
+        conn.commit()
+
+
+def _migrate_v8(conn: sqlite3.Connection) -> None:
+    """v8: add is_last_used flag to users."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    if "is_last_used" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_last_used INTEGER NOT NULL DEFAULT 0")
         conn.commit()
 
 

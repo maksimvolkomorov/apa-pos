@@ -17,12 +17,17 @@ class POSView(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=BG)
         self._order: list[dict] = []    # [{"product": dict, "qty": int}]
+        self._last_processed_by: str | None = user_model.get_last_used()
         self._build()
 
     # ── Public hook called by App.switch_tab ──────────────────────────────────
     def on_show(self):
         self._reload_name_values()
         self._bc_entry.focus_set()
+
+    def on_hide(self):
+        self._name_ac._hide()
+        self._name_ac.set("")
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def _build(self):
@@ -88,7 +93,7 @@ class POSView(tk.Frame):
                  anchor="w", padx=6).pack(side="left", fill="x", expand=True)
 
         for text, width, anchor in (
-            ("Unit Price", _UP,  "e"),
+            ("Price", _UP,  "e"),
             ("Qty",        _QTY, "center"),
             ("Total",      _TOT, "e"),
             ("",           _REM, "center"),
@@ -118,7 +123,7 @@ class POSView(tk.Frame):
         self._fixed_cell = fixed_cell
 
         # summary panel — right
-        right = tk.Frame(split, bg="white", bd=1, relief="solid", width=230)
+        right = tk.Frame(split, bg="white", bd=1, relief="solid", width=345)
         right.pack(side="right", fill="y", padx=(12, 0))
         right.pack_propagate(False)
 
@@ -141,7 +146,24 @@ class POSView(tk.Frame):
 
         self._items_var    = summary_row("Items:")
         self._subtotal_var = summary_row("Subtotal:")
-        tax_pct = f"{config.TAX_RATE:.0%}"
+
+        # Discount row
+        disc_f = tk.Frame(inner, bg="white")
+        disc_f.pack(fill="x", pady=3)
+        tk.Label(disc_f, text="Discount:", bg="white",
+                 font=("Helvetica", 10), anchor="w").pack(side="left")
+        self._discount_amt_var = tk.StringVar(master=self, value="")
+        tk.Label(disc_f, textvariable=self._discount_amt_var, bg="white",
+                 font=("Helvetica", 10, "bold"), fg="#C0392B").pack(side="right")
+        tk.Label(disc_f, text="%", bg="white",
+                 font=("Helvetica", 10)).pack(side="right", padx=(0, 2))
+        self._discount_var = tk.StringVar(master=self)
+        self._discount_var.trace_add("write", lambda *_: self._update_summary())
+        tk.Entry(disc_f, textvariable=self._discount_var, width=4,
+                 font=("Helvetica", 10), relief="solid", bd=1,
+                 justify="right").pack(side="right", padx=(4, 2))
+
+        tax_pct = f"{config.TAX_RATE * 100:.4g}%"
         self._tax_var      = summary_row(f"Tax ({tax_pct}):")
         ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=6)
         self._total_var    = summary_row("TOTAL:")
@@ -153,7 +175,19 @@ class POSView(tk.Frame):
 
     # ── Name autocomplete helpers ─────────────────────────────────────────────
     def _reload_name_values(self):
-        self._name_ac.set_values([p["title"] for p in product_model.get_all()])
+        sym = config.CURRENCY_SYMBOL
+        display_map = {}
+        for p in product_model.get_all():
+            title   = (p["title"] or "")
+            author  = (p.get("author") or "")
+            price   = f"{sym}{p['price']:.2f}"
+            pid     = str(p["id"]).rjust(6)
+            t_col   = (title[:47] + "...").ljust(50) if len(title)  > 50 else title.ljust(50)
+            a_col   = (author[:47] + "...").ljust(50) if len(author) > 50 else author.ljust(50)
+            stock   = str(p.get("stock", 0)).rjust(5)
+            display = f"{pid}  {t_col}  {a_col}  {price}  {stock}"
+            display_map[display] = title
+        self._name_ac.set_display_values(display_map)
 
     def _on_name_selected(self, value: str) -> None:
         """Called immediately when the user picks a suggestion from the list."""
@@ -308,11 +342,20 @@ class POSView(tk.Frame):
         sym      = config.CURRENCY_SYMBOL
         count    = sum(i["qty"] for i in self._order)
         subtotal = sum(i["product"]["price"] * i["qty"] for i in self._order)
-        tax      = round(subtotal * config.TAX_RATE, 2)
-        total    = subtotal + tax
+
+        try:
+            disc_pct = max(0.0, min(100.0, float(self._discount_var.get() or 0)))
+        except ValueError:
+            disc_pct = 0.0
+
+        disc_amt  = round(subtotal * disc_pct / 100, 2)
+        discounted = subtotal - disc_amt
+        tax        = round(discounted * config.TAX_RATE, 2)
+        total      = discounted + tax
 
         self._items_var.set(str(count) if count else "—")
         self._subtotal_var.set(f"{sym}{subtotal:.2f}" if count else "—")
+        self._discount_amt_var.set(f"-{sym}{disc_amt:.2f}" if (count and disc_amt) else "")
         self._tax_var.set(f"{sym}{tax:.2f}"           if count else "—")
         self._total_var.set(f"{sym}{total:.2f}"       if count else "—")
 
@@ -324,40 +367,95 @@ class POSView(tk.Frame):
             self._order.clear()
             self._refresh_tv()
 
-    def _ask_processed_by(self) -> str | None:
-        """Show a modal asking who is processing the order. Returns name or None."""
+    def _checkout_dialog(self) -> dict | None:
+        """Unified checkout modal. Returns dict or None if cancelled."""
         users = user_model.get_all()
-        if not users:
-            return None
-
         result = [None]
+
         dlg = tk.Toplevel(self, bg=BG)
-        dlg.title("Processed by")
+        dlg.title("Complete Order")
         dlg.resizable(False, False)
         dlg.grab_set()
 
-        tk.Label(dlg, text="Who is processing this order?",
-                 bg=BG, font=("Helvetica", 11)).pack(padx=24, pady=(20, 10))
+        pad = {"padx": 24}
 
-        from tkinter import ttk
-        names = [u["name"] for u in users]
-        var = tk.StringVar(value=names[0])
-        cb = ttk.Combobox(dlg, textvariable=var, values=names,
-                          state="readonly", font=("Helvetica", 11), width=22)
-        cb.pack(padx=24, pady=(0, 16))
+        # Processed by (only if users exist)
+        user_var = tk.StringVar()
+        if users:
+            tk.Label(dlg, text="Processed by:", bg=BG,
+                     font=("Helvetica", 10)).pack(anchor="w", pady=(20, 2), **pad)
+            names   = [u["name"] for u in users]
+            default = self._last_processed_by if self._last_processed_by in names else names[0]
+            user_var.set(default)
+            ttk.Combobox(dlg, textvariable=user_var, values=names,
+                         state="readonly", font=("Helvetica", 11),
+                         width=26).pack(anchor="w", **pad)
+
+        # Payment method
+        tk.Label(dlg, text="Payment method:", bg=BG,
+                 font=("Helvetica", 10)).pack(anchor="w", pady=(16, 6), **pad)
+
+        method_var = tk.StringVar(value="cash")
+        methods = [("Cash", "cash"), ("Card", "card"),
+                   ("Check", "check"), ("Gift", "gift")]
+
+        btn_frame = tk.Frame(dlg, bg=BG)
+        btn_frame.pack(anchor="w", **pad)
+        method_btns: dict[str, tk.Button] = {}
+
+        # Container always occupies its position; name_frame toggled inside it
+        name_container = tk.Frame(dlg, bg=BG)
+        name_container.pack(anchor="w", fill="x", **pad)
+        name_frame = tk.Frame(name_container, bg=BG)
+        tk.Label(name_frame, text="Customer name:", bg=BG,
+                 font=("Helvetica", 10)).pack(anchor="w", pady=(12, 2))
+        customer_var = tk.StringVar()
+        tk.Entry(name_frame, textvariable=customer_var, width=28,
+                 font=("Helvetica", 11), relief="solid", bd=1).pack(anchor="w")
+
+        def _select_method(m: str):
+            method_var.set(m)
+            for k, b in method_btns.items():
+                b.config(bg="#2E6DA4" if k == m else "#D0D0D0",
+                         fg="white"   if k == m else "#1C1C1C")
+            if m == "check":
+                name_frame.pack(anchor="w")
+            else:
+                name_frame.pack_forget()
+
+        for label, val in methods:
+            b = tk.Button(btn_frame, text=label, width=7,
+                          font=("Helvetica", 10), relief="flat", cursor="hand2",
+                          bg="#D0D0D0", fg="#1C1C1C",
+                          command=lambda v=val: _select_method(v))
+            b.pack(side="left", padx=(0, 6))
+            method_btns[val] = b
+        _select_method("cash")
+
+        # Buttons
+        btn_row = tk.Frame(dlg, bg=BG)
+        btn_row.pack(pady=(20, 16), **pad)
 
         def _confirm():
-            result[0] = var.get() or None
+            if method_var.get() == "check" and not customer_var.get().strip():
+                messagebox.showwarning("Required", "Please enter the customer name for check payment.", parent=dlg)
+                return
+            pb = user_var.get() or None
+            if pb:
+                self._last_processed_by = pb
+                user_model.set_last_used(pb)
+            result[0] = {
+                "processed_by":   pb,
+                "payment_method": method_var.get(),
+                "customer_name":  customer_var.get().strip() or None,
+            }
             dlg.destroy()
 
         def _cancel():
-            result[0] = "CANCEL"
             dlg.destroy()
 
-        btn_row = tk.Frame(dlg, bg=BG)
-        btn_row.pack(pady=(0, 16))
-        styled_button(btn_row, "Cancel",   _cancel).pack(side="left", padx=6)
-        styled_button(btn_row, "Complete", _confirm, bg=BTN_OK).pack(side="left", padx=6)
+        styled_button(btn_row, "Cancel",         _cancel).pack(side="left", padx=(0, 8))
+        styled_button(btn_row, "Complete Order", _confirm, bg=BTN_OK).pack(side="left")
 
         dlg.update_idletasks()
         x = self.winfo_rootx() + (self.winfo_width()  - dlg.winfo_width())  // 2
@@ -372,9 +470,14 @@ class POSView(tk.Frame):
                                    "Add at least one item before checkout.")
             return
 
-        processed_by = self._ask_processed_by()
-        if processed_by == "CANCEL":
+        checkout = self._checkout_dialog()
+        if checkout is None:
             return
+
+        try:
+            disc_pct = max(0.0, min(100.0, float(self._discount_var.get() or 0)))
+        except ValueError:
+            disc_pct = 0.0
 
         items = [
             {
@@ -386,7 +489,13 @@ class POSView(tk.Frame):
         ]
 
         try:
-            new_order = order_model.create(items, processed_by=processed_by)
+            new_order = order_model.create(
+                items,
+                processed_by=checkout["processed_by"],
+                discount_pct=disc_pct,
+                payment_method=checkout["payment_method"],
+                customer_name=checkout["customer_name"],
+            )
         except ValueError as exc:
             messagebox.showerror("Checkout Failed", str(exc))
             return
@@ -396,6 +505,7 @@ class POSView(tk.Frame):
         total    = new_order["total"]
 
         self._order.clear()
+        self._discount_var.set("")
         self._refresh_tv()
         self._reload_name_values()      # stock changed — refresh autocomplete
 
@@ -411,8 +521,10 @@ class POSView(tk.Frame):
                     f"could not be sent:\n\n{exc}",
                 )
 
+        method = checkout["payment_method"]
+        total_str = "GIFT" if method == "gift" else f"{sym}{total:.2f}"
         messagebox.showinfo(
             "All set!",
-            f"All set!  {sym}{total:.2f} — Order #{order_id}",
+            f"All set!  {total_str} — Order #{order_id}",
         )
         self._bc_entry.focus_set()

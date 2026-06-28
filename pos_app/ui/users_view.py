@@ -7,6 +7,8 @@ from ui.theme import BG, BTN_OK, BTN_DNG, FG_MUTED, HEADER_BG, HEADER_FG, styled
 
 
 class UsersView(tk.Frame):
+    PIN_PROTECTED = True
+
     def __init__(self, parent):
         super().__init__(parent, bg=BG)
         self._users: list[dict] = []

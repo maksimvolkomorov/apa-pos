@@ -60,7 +60,9 @@ def item_count(order_id: int) -> int:
 
 # ── Mutations ─────────────────────────────────────────────────────────────────
 
-def create(items: list[dict], processed_by: str | None = None) -> dict:
+def create(items: list[dict], processed_by: str | None = None,
+           discount_pct: float = 0.0, payment_method: str = "cash",
+           customer_name: str | None = None) -> dict:
     """
     Create an order and atomically decrement stock.
 
@@ -87,13 +89,21 @@ def create(items: list[dict], processed_by: str | None = None) -> dict:
             )
         product_names[item["product_id"]] = row["title"]
 
-    total = sum(i["quantity"] * i["unit_price"] for i in items)
-    now   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
+    if payment_method == "gift":
+        discount_pct, total = 0.0, 0.0
+    else:
+        discount_pct = max(0.0, min(100.0, float(discount_pct)))
+        total = round(subtotal * (1 - discount_pct / 100), 2)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with conn:
         cur.execute(
-            "INSERT INTO orders (total, processed_by, created_at) VALUES (?, ?, ?)",
-            (total, processed_by or None, now),
+            "INSERT INTO orders"
+            " (total, discount_pct, payment_method, customer_name, processed_by, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (total, discount_pct, payment_method,
+             customer_name or None, processed_by or None, now),
         )
         order_id = cur.lastrowid
         for item in items:

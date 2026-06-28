@@ -6,13 +6,13 @@ import config
 from models import product as product_model
 from services import barcode_service, zebra_service, receipt_service
 from ui.theme import (
-    BG, BTN_DNG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
+    BG, BTN_BG, BTN_FG, BTN_DNG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
     TROW_ALT, TROW_LOW, TROW_WARN, NAV_ACT,
     styled_button, insert_rows, Pager,
 )
 
 _COLS    = ("ID", "Title", "Author", "Publisher", "Location", "Store", "Storage", "Price")
-_WIDTHS  = (45, 180, 130, 120, 90, 60, 74, 75)
+_WIDTHS  = (68, 180, 130, 120, 104, 60, 74, 75)
 _LEFT    = {"Title", "Author", "Publisher", "Location"}
 _STRETCH = {"Title", "Author", "Publisher"}
 _HDR_H   = 30
@@ -48,20 +48,23 @@ class ProductDialog(tk.Toplevel):
         self.grab_set()
         self.transient(parent)
         self.update_idletasks()
-        px = parent.winfo_rootx() + (parent.winfo_width()  - self.winfo_width())  // 2
-        py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{px}+{py}")
+        w = int(self.winfo_screenwidth() * 0.75)
+        h = self.winfo_height()
+        px = parent.winfo_rootx() + (parent.winfo_width()  - w) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        self.geometry(f"{w}x{h}+{px}+{py}")
 
     def _label_entry(self, text: str, row: int, default="") -> tk.StringVar:
         tk.Label(self, text=text, bg=BG, font=("Helvetica", 10),
                  anchor="e").grid(row=row, column=0, sticky="e", padx=12, pady=6)
         var = tk.StringVar(master=self, value=str(default))
-        tk.Entry(self, textvariable=var, width=32,
+        tk.Entry(self, textvariable=var,
                  font=("Helvetica", 10), relief="solid", bd=1
-                 ).grid(row=row, column=1, padx=12, pady=6)
+                 ).grid(row=row, column=1, padx=12, pady=6, sticky="ew")
         return var
 
     def _build(self):
+        self.columnconfigure(1, weight=1)
         d = self._data
         self._f_title     = self._label_entry("Title:",     0, d.get("title",     ""))
         self._f_author    = self._label_entry("Author:",    1, d.get("author",    ""))
@@ -149,8 +152,7 @@ class StockView(tk.Frame):
         tk.Entry(top, textvariable=self._search_var, width=30,
                  font=("Helvetica", 10), relief="solid", bd=1
                  ).pack(side="left", padx=6)
-        styled_button(top, "Clear Filters", self._clear_filters,
-                      bg="#95A5A6").pack(side="left", padx=6)
+        styled_button(top, "Clear Filters", self._clear_filters).pack(side="left", padx=6)
 
         # Treeview style: no border so column x=0 matches overlay x=0
         style = ttk.Style()
@@ -227,12 +229,22 @@ class StockView(tk.Frame):
         # Action buttons
         bot = tk.Frame(self, bg=BG, pady=8)
         bot.pack(fill="x", padx=12)
-        styled_button(bot, "+ Add Product",      self._add,           bg=BTN_OK   ).pack(side="left", padx=4)
-        styled_button(bot, "Edit Selected",      self._edit                        ).pack(side="left", padx=4)
-        styled_button(bot, "Delete Selected",    self._delete,        bg=BTN_DNG  ).pack(side="left", padx=4)
-        styled_button(bot, "Print Barcode",      self._print_bc,
-                      bg="#8E44AD", fg="#1C1C1C"                                   ).pack(side="left", padx=4)
-        styled_button(bot, "Print Stock Report", self._print_report,  bg="#E67E22" ).pack(side="left", padx=4)
+        styled_button(bot, "+ Add Product",      self._add,          bg=BTN_OK   ).pack(side="left", padx=4)
+        self._btn_edit   = styled_button(bot, "Edit Selected",   self._edit,      )
+        self._btn_delete = styled_button(bot, "Delete Selected", self._delete,    bg=BTN_DNG)
+        self._btn_bc     = styled_button(bot, "Print Barcode",   self._print_bc,  bg="#8E44AD", fg="#1C1C1C")
+        self._btn_edit  .pack(side="left", padx=4)
+        self._btn_delete.pack(side="left", padx=4)
+        self._btn_bc    .pack(side="left", padx=4)
+        styled_button(bot, "Print Stock Report", self._print_report, bg="#E67E22").pack(side="left", padx=4)
+
+        self._selection_btns = [
+            (self._btn_edit,   BTN_BG,    BTN_FG),
+            (self._btn_delete, BTN_DNG,   BTN_FG),
+            (self._btn_bc,     "#8E44AD", "#1C1C1C"),
+        ]
+        self._tv.bind("<<TreeviewSelect>>", self._on_selection)
+        self._on_selection()
 
     def _place_overlay(self):
         """Position header buttons and filter entries to match actual treeview column widths."""
@@ -246,6 +258,17 @@ class StockView(tk.Frame):
                 x += w
         except tk.TclError:
             pass
+
+    _DISABLED_BG = "#BDBDBD"
+    _DISABLED_FG = "#888888"
+
+    def _on_selection(self, *_):
+        has_sel = bool(self._tv.selection())
+        for btn, active_bg, active_fg in self._selection_btns:
+            if has_sel:
+                btn.config(state="normal", bg=active_bg, fg=active_fg, cursor="hand2")
+            else:
+                btn.config(state="disabled", bg=self._DISABLED_BG, fg=self._DISABLED_FG, cursor="")
 
     # ── Data refresh ──────────────────────────────────────────────────────────
     def on_show(self):
@@ -321,6 +344,7 @@ class StockView(tk.Frame):
         page_lows  = {i - page_start for i in low_indices
                       if page_start <= i < page_start + self._pager.page_size}
         insert_rows(self._tv, page_rows, warn_indices=page_warns, low_indices=page_lows)
+        self._on_selection()
 
     # ── Sort ──────────────────────────────────────────────────────────────────
     def _sort_by(self, col: str):

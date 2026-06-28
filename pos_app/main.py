@@ -14,6 +14,23 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# ── Single-instance guard (Windows named mutex) ───────────────────────────────
+_mutex = None
+if sys.platform == "win32":
+    import ctypes
+    _mutex = ctypes.windll.kernel32.CreateMutexW(None, True, "APA_POS_SingleInstance")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showwarning("APA@POS", "APA@POS is already running.")
+            root.destroy()
+        except Exception:
+            pass
+        sys.exit(0)
+
 
 def _fatal(msg: str) -> None:
     """Show a startup error and exit. Works before Tk is initialised."""

@@ -17,7 +17,7 @@ def _work_area() -> tuple[int, int, int, int]:
     return 0, 0, None, None
 
 import config
-from ui.theme import NAV_BG, NAV_ACT, BG, styled_button
+from ui.theme import NAV_BG, NAV_ACT, BG, styled_button, show_pin_lock
 from ui.stock_view import StockView
 from ui.pos_view import POSView
 from ui.history_view import HistoryView
@@ -27,8 +27,8 @@ from ui.users_view import UsersView
 
 class App(tk.Tk):
     TABS = [
-        ("Stock Management", StockView),
-        ("POS / New Order",  POSView),
+        ("Sale",             POSView),
+        ("Inventory",        StockView),
         ("Order History",    HistoryView),
         ("Import / Export",  ImportExportView),
         ("Users",            UsersView),
@@ -122,11 +122,31 @@ class App(tk.Tk):
     def switch_tab(self, idx: int):
         _, ViewClass = self.TABS[idx]
         if self._active is not None:
-            self._active.pack_forget()
+            if hasattr(self._active, "on_hide"):
+                self._active.on_hide()
+            if self._active in self._views.values():
+                self._active.pack_forget()
+            else:
+                self._active.destroy()
+        self.focus_set()
         for i, btn in enumerate(self._tab_btns):
             btn.config(bg=NAV_ACT if i == idx else NAV_BG, fg="#1C1C1C")
         view = self._views[ViewClass]
-        if hasattr(view, "on_show"):
-            view.on_show()
-        view.pack(fill="both", expand=True)
-        self._active = view
+        if getattr(view, "PIN_PROTECTED", False):
+            pin_frame = tk.Frame(self._content, bg=BG)
+            pin_frame.pack(fill="both", expand=True)
+            self._active = pin_frame
+
+            def _on_success(v=view):
+                pin_frame.destroy()
+                if hasattr(v, "on_show"):
+                    v.on_show()
+                v.pack(fill="both", expand=True)
+                self._active = v
+
+            show_pin_lock(pin_frame, on_success=_on_success)
+        else:
+            if hasattr(view, "on_show"):
+                view.on_show()
+            view.pack(fill="both", expand=True)
+            self._active = view

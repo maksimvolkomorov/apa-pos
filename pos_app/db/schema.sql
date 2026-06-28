@@ -19,10 +19,13 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS orders (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    total        REAL    NOT NULL,
-    processed_by TEXT,
-    created_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    total          REAL    NOT NULL,
+    discount_pct   REAL    NOT NULL DEFAULT 0,
+    payment_method TEXT    NOT NULL DEFAULT 'cash',
+    customer_name  TEXT,
+    processed_by   TEXT,
+    created_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS order_items (

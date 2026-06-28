@@ -25,3 +25,17 @@ def delete(user_id: int) -> None:
     conn = get_connection()
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
+
+
+def get_last_used() -> str | None:
+    row = get_connection().execute(
+        "SELECT name FROM users WHERE is_last_used = 1 LIMIT 1"
+    ).fetchone()
+    return row["name"] if row else None
+
+
+def set_last_used(name: str) -> None:
+    conn = get_connection()
+    conn.execute("UPDATE users SET is_last_used = 0")
+    conn.execute("UPDATE users SET is_last_used = 1 WHERE name = ?", (name,))
+    conn.commit()

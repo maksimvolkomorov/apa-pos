@@ -6,16 +6,19 @@ import config
 from models import order as order_model
 from services import receipt_service
 from ui.theme import (
-    BG, BTN_DNG, BTN_BG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
+    BG, BTN_BG, BTN_FG, BTN_DNG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
     styled_button, make_treeview, insert_rows, Pager, fmt_dt,
 )
 
 
 class HistoryView(tk.Frame):
+    PIN_PROTECTED = True
     def __init__(self, parent):
         super().__init__(parent, bg=BG)
         self._current_order = None
         self._current_items = []
+        self._sort_col: str | None = None
+        self._sort_asc: bool = True
         self._build()
 
     # ── Public hook called by App.switch_tab ──────────────────────────────────
@@ -50,7 +53,7 @@ class HistoryView(tk.Frame):
                  font=("Helvetica", 10), relief="solid", bd=1,
                  ).pack(side="left", padx=4)
 
-        tk.Label(top, text="(YYYY-MM-DD)", bg=BG,
+        tk.Label(top, text="(MM/DD/YYYY)", bg=BG,
                  font=("Helvetica", 9), fg=FG_MUTED).pack(side="left", padx=(2, 12))
 
         styled_button(top, "Filter", self._on_filter).pack(side="left", padx=4)
@@ -65,6 +68,9 @@ class HistoryView(tk.Frame):
         tv_frame.pack(fill="both", expand=True, padx=12, pady=4)
         self._tv.bind("<Double-1>", lambda e: self._view_details())
 
+        for col in cols:
+            self._tv.heading(col, command=lambda c=col: self._sort_by(c))
+
         # Pager
         self._pager = Pager(self._list_panel, config.PAGE_SIZE, self._refresh)
         self._pager.pack(fill="x", padx=12, pady=(0, 2))
@@ -72,7 +78,15 @@ class HistoryView(tk.Frame):
         # Action buttons
         bot = tk.Frame(self._list_panel, bg=BG, pady=8)
         bot.pack(fill="x", padx=12)
-        styled_button(bot, "View Details", self._view_details).pack(side="left", padx=4)
+        self._btn_details = styled_button(bot, "View Details", self._view_details)
+        self._btn_details.pack(side="left", padx=4)
+        styled_button(bot, "Print Report", self._print_report,
+                      bg=BTN_OK).pack(side="left", padx=4)
+        styled_button(bot, "Detailed Report", self._print_detailed_report,
+                      bg=BTN_OK).pack(side="left", padx=4)
+
+        self._selection_btns = [(self._btn_details, BTN_BG, BTN_FG)]
+        self._tv.bind("<<TreeviewSelect>>", self._on_selection)
 
     def _build_detail_panel(self):
         self._detail_panel = tk.Frame(self, bg=BG)
@@ -131,26 +145,82 @@ class HistoryView(tk.Frame):
         self._pager.reset()
         self._refresh()
 
+    def _sort_by(self, col: str):
+        if self._sort_col == col:
+            self._sort_asc = not self._sort_asc
+        else:
+            self._sort_col = col
+            self._sort_asc = True
+        self._update_headings()
+        self._pager.reset()
+        self._refresh()
+
+    def _update_headings(self):
+        cols = ("ID", "Date / Time", "Items", "Total", "By")
+        for col in cols:
+            arrow = (" ▲" if self._sort_asc else " ▼") if col == self._sort_col else ""
+            self._tv.heading(col, text=col + arrow)
+
+    _DISABLED_BG = "#BDBDBD"
+    _DISABLED_FG = "#888888"
+
+    def _on_selection(self, *_):
+        has_sel = bool(self._tv.selection())
+        for btn, active_bg, active_fg in self._selection_btns:
+            if has_sel:
+                btn.config(state="normal", bg=active_bg, fg=active_fg, cursor="hand2")
+            else:
+                btn.config(state="disabled", bg=self._DISABLED_BG, fg=self._DISABLED_FG, cursor="")
+
+    @staticmethod
+    def _to_iso(us_date: str) -> str | None:
+        """Convert MM/DD/YYYY → YYYY-MM-DD; return None if blank or unparseable."""
+        s = us_date.strip()
+        if not s:
+            return None
+        try:
+            from datetime import datetime
+            return datetime.strptime(s, "%m/%d/%Y").strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+
     def _refresh(self, *_):
-        date_from = self._from_var.get().strip() or None
-        date_to   = self._to_var.get().strip()   or None
+        date_from = self._to_iso(self._from_var.get())
+        date_to   = self._to_iso(self._to_var.get())
 
         orders = order_model.get_all(date_from=date_from, date_to=date_to)
 
         sym  = config.CURRENCY_SYMBOL
-        rows = []
+        raw  = []
         for o in orders:
             count = order_model.item_count(o["id"])
-            rows.append((
-                o["id"],
-                fmt_dt(o["created_at"]),
-                count,
-                f"{sym}{o['total']:.2f}",
-                o.get("processed_by") or "—",
-            ))
+            raw.append({
+                "id":    o["id"],
+                "dt":    o["created_at"],
+                "count": count,
+                "total": o["total"],
+                "by":    o.get("processed_by") or "",
+            })
+
+        _key = {
+            "ID":          lambda r: r["id"],
+            "Date / Time": lambda r: r["dt"],
+            "Items":       lambda r: r["count"],
+            "Total":       lambda r: r["total"],
+            "By":          lambda r: r["by"].lower(),
+        }
+        if self._sort_col and self._sort_col in _key:
+            raw.sort(key=_key[self._sort_col], reverse=not self._sort_asc)
+
+        rows = [
+            (r["id"], fmt_dt(r["dt"]), r["count"],
+             f"{sym}{r['total']:.2f}", r["by"] or "—")
+            for r in raw
+        ]
 
         self._pager.set_total(len(rows))
         insert_rows(self._tv, self._pager.slice(rows))
+        self._on_selection()
 
     # ── Detail view ───────────────────────────────────────────────────────────
     def _selected_order_id(self) -> int | None:
@@ -185,6 +255,15 @@ class HistoryView(tk.Frame):
         by = order.get("processed_by") or "—"
         tk.Label(self._detail_meta, text=f"Processed by: {by}",
                  bg=BG, font=("Helvetica", 10)).pack(anchor="w")
+        method = (order.get("payment_method") or "cash").upper()
+        customer = order.get("customer_name")
+        method_str = f"{method}  —  {customer}" if customer else method
+        tk.Label(self._detail_meta, text=f"Payment: {method_str}",
+                 bg=BG, font=("Helvetica", 10)).pack(anchor="w")
+        disc = order.get("discount_pct") or 0
+        if disc:
+            tk.Label(self._detail_meta, text=f"Discount: {disc:.4g}%",
+                     bg=BG, font=("Helvetica", 10), fg="#C0392B").pack(anchor="w")
 
         # Populate items table
         self._detail_tv.delete(*self._detail_tv.get_children())
@@ -206,6 +285,30 @@ class HistoryView(tk.Frame):
         )
 
         self._show_detail()
+
+    def _print_report(self):
+        date_from = self._to_iso(self._from_var.get())
+        date_to   = self._to_iso(self._to_var.get())
+        orders    = order_model.get_all(date_from=date_from, date_to=date_to)
+        if not orders:
+            messagebox.showinfo("Report", "No orders found for the selected period.")
+            return
+        try:
+            receipt_service.build_sales_report_pdf(orders, date_from, date_to)
+        except Exception as exc:
+            messagebox.showwarning("Report Error", str(exc))
+
+    def _print_detailed_report(self):
+        date_from = self._to_iso(self._from_var.get())
+        date_to   = self._to_iso(self._to_var.get())
+        orders    = order_model.get_all(date_from=date_from, date_to=date_to)
+        if not orders:
+            messagebox.showinfo("Report", "No orders found for the selected period.")
+            return
+        try:
+            receipt_service.build_detailed_report_pdf(orders, date_from, date_to)
+        except Exception as exc:
+            messagebox.showwarning("Report Error", str(exc))
 
     def _reprint_receipt(self):
         if not self._current_order:
