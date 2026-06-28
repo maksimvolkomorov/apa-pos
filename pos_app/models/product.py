@@ -16,7 +16,7 @@ def _make_barcode(product_id: int) -> str:
 
 def get_all() -> list[dict]:
     rows = get_connection().execute(
-        "SELECT * FROM products ORDER BY name COLLATE NOCASE"
+        "SELECT * FROM products ORDER BY title COLLATE NOCASE"
     ).fetchall()
     return [_row(r) for r in rows]
 
@@ -25,9 +25,9 @@ def search(query: str) -> list[dict]:
     q = f"%{query}%"
     rows = get_connection().execute(
         "SELECT * FROM products"
-        " WHERE name LIKE ? OR barcode LIKE ?"
-        " ORDER BY name COLLATE NOCASE",
-        (q, q),
+        " WHERE title LIKE ? OR author LIKE ? OR barcode LIKE ?"
+        " ORDER BY title COLLATE NOCASE",
+        (q, q, q),
     ).fetchall()
     return [_row(r) for r in rows]
 
@@ -48,37 +48,45 @@ def get_by_barcode(barcode: str) -> dict | None:
 
 # ── Mutations ─────────────────────────────────────────────────────────────────
 
-def create(name: str, stock: int, price: float) -> dict:
+def create(title: str, stock: int, price: float, *,
+           author: str = "", publisher: str = "",
+           webstore: str = "", location: str = "",
+           storage: int | None = None) -> dict:
     conn = get_connection()
     cur = conn.cursor()
-    # Use a unique temp barcode so the NOT NULL / UNIQUE constraint holds
-    # until we know the real auto-assigned id.
     temp = f"__pending_{uuid.uuid4().hex}"
     cur.execute(
-        "INSERT INTO products (name, barcode, stock, price) VALUES (?, ?, ?, ?)",
-        (name, temp, stock, price),
+        "INSERT INTO products"
+        " (title, author, publisher, webstore, location, storage, barcode, stock, price)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (title, author or None, publisher or None,
+         webstore or None, location or None, storage, temp, stock, price),
     )
     product_id = cur.lastrowid
     barcode = _make_barcode(product_id)
-    cur.execute(
-        "UPDATE products SET barcode = ? WHERE id = ?", (barcode, product_id)
-    )
+    cur.execute("UPDATE products SET barcode = ? WHERE id = ?", (barcode, product_id))
     conn.commit()
     return get_by_id(product_id)
 
 
-def update(product_id: int, name: str, stock: int, price: float) -> dict:
+def update(product_id: int, title: str, stock: int, price: float, *,
+           author: str = "", publisher: str = "",
+           webstore: str = "", location: str = "",
+           storage: int | None = None) -> dict:
     conn = get_connection()
     conn.execute(
-        "UPDATE products SET name = ?, stock = ?, price = ? WHERE id = ?",
-        (name, stock, price, product_id),
+        "UPDATE products"
+        " SET title=?, author=?, publisher=?, webstore=?, location=?, storage=?,"
+        "     stock=?, price=?"
+        " WHERE id=?",
+        (title, author or None, publisher or None,
+         webstore or None, location or None, storage, stock, price, product_id),
     )
     conn.commit()
     return get_by_id(product_id)
 
 
 def update_stock(product_id: int, delta: int) -> None:
-    """Apply delta (negative to decrement) to a product's stock."""
     conn = get_connection()
     conn.execute(
         "UPDATE products SET stock = stock + ? WHERE id = ?",
@@ -88,11 +96,6 @@ def update_stock(product_id: int, delta: int) -> None:
 
 
 def delete(product_id: int) -> bool:
-    """
-    Delete a product.  order_items.product_id is set to NULL automatically
-    via ON DELETE SET NULL — order history is preserved through the
-    snapshotted product_name column.
-    """
     conn = get_connection()
     conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()

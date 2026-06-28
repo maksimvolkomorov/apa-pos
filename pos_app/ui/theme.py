@@ -13,15 +13,16 @@ def fmt_dt(iso: str) -> str:
 
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-BG        = "#F5F5F5"
-NAV_BG    = "#2C3E50"
+BG        = "#FFFFFF"
+NAV_BG    = "#FFFFFF"
 NAV_ACT   = "#1ABC9C"
 BTN_BG    = "#3498DB"
 BTN_FG    = "#1C1C1C"
 BTN_DNG   = "#E74C3C"
 BTN_OK    = "#2ECC71"
 TROW_ALT  = "#EAF4FB"
-TROW_WARN = "#FDECEA"
+TROW_LOW  = "#FFE033"
+TROW_WARN = "#FF4444"
 HEADER_BG = "#2980B9"
 HEADER_FG = "#FFFFFF"
 BORDER    = "#BDC3C7"
@@ -69,7 +70,8 @@ def make_treeview(parent, columns, col_widths, height=12,
         tv.heading(col, text=col, anchor=anchor)
         tv.column(col, width=w, anchor=anchor)
     tv.tag_configure("alt",  background=TROW_ALT)
-    tv.tag_configure("warn", background=TROW_WARN)
+    tv.tag_configure("low",  background=TROW_LOW)
+    tv.tag_configure("warn", background=TROW_WARN, foreground="white")
 
     vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
     tv.configure(yscrollcommand=vsb.set)
@@ -78,13 +80,16 @@ def make_treeview(parent, columns, col_widths, height=12,
     return frame, tv
 
 
-def insert_rows(tv, rows, warn_indices: set = None):
-    """Populate treeview. Rows in warn_indices get the warning background."""
+def insert_rows(tv, rows, warn_indices: set = None, low_indices: set = None):
+    """Populate treeview. warn_indices → red, low_indices → yellow."""
     warn_indices = warn_indices or set()
+    low_indices  = low_indices  or set()
     tv.delete(*tv.get_children())
     for i, row in enumerate(rows):
         if i in warn_indices:
             tag = "warn"
+        elif i in low_indices:
+            tag = "low"
         elif i % 2:
             tag = "alt"
         else:

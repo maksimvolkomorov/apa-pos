@@ -35,10 +35,13 @@ ZEBRA_USB_PATH = r"\\.\USB001"
 
 # ── Currency & Tax ────────────────────────────────────────────────────────────
 CURRENCY_SYMBOL = "$"
-TAX_RATE        = 0.07        # e.g. 0.10 for 10 %
+TAX_RATE        = 0.0725      # e.g. 0.10 for 10 %
 
 # ── UI ────────────────────────────────────────────────────────────────────────
-PAGE_SIZE = 15               # rows per page in tables
+PAGE_SIZE          = 15      # rows per page in tables
+LOW_STOCK_THRESHOLD = 5      # stock ≤ this (but > 0) gets a yellow warning
+WINDOW_WIDTH       = 1920    # px; set to None to use screen width
+WINDOW_HEIGHT      = 1080    # px; capped at screen height - 60 (taskbar)
 
 # ── Barcode output ────────────────────────────────────────────────────────────
 BARCODE_OUTPUT_DIR = os.path.join(_BASE, "assets", "barcodes")

@@ -32,6 +32,42 @@ def _fmt_dt(iso: str) -> str:
 # Text receipt width in characters (for PDF/txt)
 _TXT_WIDTH = 42
 
+_VOWELS = set("AEIOU")
+
+
+def _abbr_words(name: str) -> str:
+    """Uppercase + drop vowels from every word except the first letter."""
+    words = name.upper().split()
+    return " ".join(w[0] + "".join(c for c in w[1:] if c not in _VOWELS) for w in words)
+
+
+def _abbreviate(name: str, max_chars: int) -> str:
+    """Fit name into max_chars: uppercase → abbreviate → truncate."""
+    upper = name.upper()
+    if len(upper) <= max_chars:
+        return upper
+    abbreviated = _abbr_words(name)
+    if len(abbreviated) <= max_chars:
+        return abbreviated
+    return abbreviated[: max_chars - 1] + "…"
+
+
+def _abbreviate_px(name: str, font: str, size: float, max_w: float) -> str:
+    """Pixel-accurate version of _abbreviate for proportional fonts (reportlab)."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth as sw
+    upper = name.upper()
+    if sw(upper, font, size) <= max_w:
+        return upper
+    abbreviated = _abbr_words(name)
+    if sw(abbreviated, font, size) <= max_w:
+        return abbreviated
+    # Truncate character by character
+    for i in range(len(abbreviated) - 1, 0, -1):
+        candidate = abbreviated[:i] + "…"
+        if sw(candidate, font, size) <= max_w:
+            return candidate
+    return "…"
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -105,13 +141,15 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     cmd, y = separator(y, thick=2)
     lines.append(cmd)
 
-    # Line items
+    # Line items — name line then indented qty + price line
+    _ZPL_CHARS = 42
     for item in items:
-        name     = item["product_name"][:22]
-        qty      = item["quantity"]
-        price    = item["quantity"] * item["unit_price"]
-        content  = f"{name:<22} x{qty:<2} {sym}{price:>7.2f}"
-        cmd, y = text(y, content)
+        name  = _abbreviate(item["product_name"], _ZPL_CHARS)
+        qty   = item["quantity"]
+        price = item["quantity"] * item["unit_price"]
+        cmd, y = text(y, name)
+        lines.append(cmd)
+        cmd, y = text(y, f"  x{qty:<3}  {sym}{price:.2f}")
         lines.append(cmd)
 
     # Thin separator
@@ -189,13 +227,13 @@ def _build_txt(order: dict, items: list[dict], path: str) -> None:
     ]
 
     for item in items:
-        name  = item["product_name"]
+        name  = _abbreviate(item["product_name"], w)
         qty   = item["quantity"]
         price = item["quantity"] * item["unit_price"]
-        left  = f"  {name} x{qty}"
         right = f"{sym}{price:.2f}"
-        gap   = w - len(left) - len(right)
-        receipt_lines.append(left + " " * max(gap, 1) + right)
+        receipt_lines.append(name)
+        gap = w - 2 - len(f"x{qty}") - len(right)
+        receipt_lines.append(f"  x{qty}" + " " * max(gap, 1) + right)
 
     receipt_lines += [
         sep_thin,
@@ -233,7 +271,7 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
     page_w   = 80 * mm
     line_h   = 14
     margin   = 8 * mm
-    n_lines  = 8 + len(items)
+    n_lines  = 8 + len(items) * 2
     page_h   = (n_lines * line_h + 60) * 1.0
 
     c   = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
@@ -264,11 +302,14 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
     hline(thick=1.5)
 
     for item in items:
-        name  = item["product_name"]
+        max_name_w = page_w - margin * 2
+        name  = _abbreviate_px(item["product_name"], "Helvetica", 9, max_name_w)
         qty   = item["quantity"]
         price = item["quantity"] * item["unit_price"]
         c.setFont("Helvetica", 9)
-        c.drawString(margin, y, f"{name} x{qty}")
+        c.drawString(margin, y, name)
+        y -= line_h
+        c.drawString(margin, y, f"  x{qty}")
         c.drawRightString(page_w - margin, y, f"{sym}{price:.2f}")
         y -= line_h
 

@@ -1,9 +1,20 @@
 """Root Tk window with top navigation bar."""
+import ctypes
+import ctypes.wintypes
 import os
 import sys
 import traceback
 import tkinter as tk
 from tkinter import messagebox
+
+
+def _work_area() -> tuple[int, int, int, int]:
+    """Return (x, y, width, height) of the usable screen area excluding the taskbar."""
+    if sys.platform == "win32":
+        rect = ctypes.wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+        return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+    return 0, 0, None, None
 
 import config
 from ui.theme import NAV_BG, NAV_ACT, BG, styled_button
@@ -22,10 +33,18 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("APA@POS")
-        # Fit within the available screen height (accounts for taskbar).
-        screen_h = self.winfo_screenheight()
-        win_h = min(768, screen_h - 60)
-        self.geometry(f"1024x{win_h}")
+        wa_x, wa_y, avail_w, avail_h = _work_area()
+        if avail_w is None:
+            avail_w = self.winfo_screenwidth()
+            avail_h = self.winfo_screenheight() - 60
+        win_w = min(config.WINDOW_WIDTH  or avail_w, avail_w)
+        win_h = min(config.WINDOW_HEIGHT or avail_h, avail_h)
+        self.geometry(f"{win_w}x{win_h}+{wa_x}+{wa_y}")
+        self.update_idletasks()
+        # Account for title bar: winfo_rooty is the client area top in screen coords
+        deco_h = self.winfo_rooty() - self.winfo_y()
+        win_h  = max(100, win_h - deco_h)
+        self.geometry(f"{win_w}x{win_h}+{wa_x}+{wa_y}")
         self.resizable(False, False)
         self.configure(bg=BG)
         self._set_icon()

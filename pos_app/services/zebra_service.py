@@ -8,17 +8,16 @@ import sys
 import config
 
 
-def build_product_zpl(name: str, barcode: str) -> str:
+def build_product_zpl(title: str, barcode: str) -> str:
     """
     Build a ZPL label for the Zebra GX420D on 4" (812-dot @ 203 DPI) paper.
 
     Layout (approx 1.5" / 305 dots tall):
-      - Product name  — top, large scalable font
+      - Product title — top, large scalable font
       - Code128 bars  — middle
       - Human-readable barcode string — printed by ^BC automatically
     """
-    # Truncate name to prevent overflow (~24 chars at 35pt on 4")
-    display_name = name if len(name) <= 28 else name[:25] + "…"
+    display_name = title if len(title) <= 28 else title[:25] + "…"
 
     return (
         "^XA\n"

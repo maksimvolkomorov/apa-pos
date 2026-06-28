@@ -16,7 +16,6 @@ class POSView(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=BG)
         self._order: list[dict] = []    # [{"product": dict, "qty": int}]
-        self._err_after: str | None = None
         self._build()
 
     # ── Public hook called by App.switch_tab ──────────────────────────────────
@@ -50,9 +49,6 @@ class POSView(tk.Frame):
         styled_button(top, "Add by Name",
                       self._add_by_name).pack(side="left", padx=4)
 
-        self._err_lbl = tk.Label(top, text="", fg="#E74C3C", bg=BG,
-                                 font=("Helvetica", 10))
-        self._err_lbl.pack(side="left", padx=10)
 
         # ── main split ────────────────────────────────────────────────────────
         split = tk.Frame(self, bg=BG)
@@ -156,7 +152,7 @@ class POSView(tk.Frame):
 
     # ── Name autocomplete helpers ─────────────────────────────────────────────
     def _reload_name_values(self):
-        self._name_ac.set_values([p["name"] for p in product_model.get_all()])
+        self._name_ac.set_values([p["title"] for p in product_model.get_all()])
 
     def _on_name_selected(self, value: str) -> None:
         """Called immediately when the user picks a suggestion from the list."""
@@ -169,7 +165,7 @@ class POSView(tk.Frame):
             return
         p = product_model.get_by_barcode(bc)
         if not p:
-            self._set_error(f"Barcode '{bc}' not found.")
+            messagebox.showwarning("Not Found", f"Barcode '{bc}' not found.")
         else:
             self._add_product(p)
         self._bc_var.set("")
@@ -181,14 +177,14 @@ class POSView(tk.Frame):
             return
         all_products = product_model.get_all()
         p = (
-            next((x for x in all_products if x["name"] == query),              None) or
-            next((x for x in all_products if x["name"].lower() == query.lower()), None) or
-            next((x for x in all_products if query.lower() in x["name"].lower()), None)
+            next((x for x in all_products if x["title"] == query),               None) or
+            next((x for x in all_products if x["title"].lower() == query.lower()), None) or
+            next((x for x in all_products if query.lower() in x["title"].lower()), None)
         )
         if p:
             self._add_product(p)
         else:
-            self._set_error(f"No product matching '{query}'.")
+            messagebox.showwarning("Not Found", f"No product matching '{query}'.")
         self._name_ac.set("")
         self._reload_name_values()
         self._bc_entry.focus_set()
@@ -197,7 +193,7 @@ class POSView(tk.Frame):
         # Re-fetch from DB to get the current live stock value
         fresh = product_model.get_by_id(product["id"])
         if fresh is None:
-            self._set_error("Product no longer exists.")
+            messagebox.showwarning("Not Found", "Product no longer exists.")
             return
 
         in_cart = next(
@@ -206,7 +202,7 @@ class POSView(tk.Frame):
             0,
         )
         if fresh["stock"] - in_cart <= 0:
-            self._set_error(f"'{fresh['name']}' — insufficient stock.")
+            messagebox.showwarning("Out of Stock", f"'{fresh['title']}' — insufficient stock.")
             return
 
         for item in self._order:
@@ -217,12 +213,6 @@ class POSView(tk.Frame):
 
         self._order.append({"product": fresh, "qty": 1})
         self._refresh_tv()
-
-    def _set_error(self, msg: str):
-        self._err_lbl.config(text=msg)
-        if self._err_after:
-            self.after_cancel(self._err_after)
-        self._err_after = self.after(3000, lambda: self._err_lbl.config(text=""))
 
     # ── Order rows ────────────────────────────────────────────────────────────
     def _refresh_tv(self):
@@ -243,7 +233,7 @@ class POSView(tk.Frame):
             row.pack(fill="x")
 
             # Product (flexible — drives row height)
-            tk.Label(row, text=p["name"], bg=bg,
+            tk.Label(row, text=p["title"], bg=bg,
                      font=("Helvetica", 10), anchor="w",
                      padx=6, pady=5).pack(side="left", fill="x", expand=True)
 

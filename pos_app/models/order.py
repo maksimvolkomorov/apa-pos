@@ -76,16 +76,16 @@ def create(items: list[dict]) -> dict:
     product_names: dict[int, str] = {}
     for item in items:
         row = cur.execute(
-            "SELECT stock, name FROM products WHERE id = ?", (item["product_id"],)
+            "SELECT stock, title FROM products WHERE id = ?", (item["product_id"],)
         ).fetchone()
         if row is None:
             raise ValueError(f"Product id={item['product_id']} not found.")
         if row["stock"] < item["quantity"]:
             raise ValueError(
-                f"Insufficient stock for '{row['name']}': "
+                f"Insufficient stock for '{row['title']}': "
                 f"have {row['stock']}, need {item['quantity']}."
             )
-        product_names[item["product_id"]] = row["name"]
+        product_names[item["product_id"]] = row["title"]
 
     total = sum(i["quantity"] * i["unit_price"] for i in items)
     now   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -75,6 +75,33 @@ def _migrate(conn: sqlite3.Connection) -> None:
     with open(schema_path, encoding="utf-8") as fh:
         conn.executescript(fh.read())
     _migrate_order_items_snapshot(conn)
+    _migrate_products_v3(conn)
+    _migrate_products_v4(conn)
+
+
+def _migrate_products_v3(conn: sqlite3.Connection) -> None:
+    """
+    v3 migration: rename name→title, add author/publisher/webstore/location.
+    Safe to run on every startup — no-op if already migrated.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
+    if "name" in cols:
+        conn.execute("ALTER TABLE products RENAME COLUMN name TO title")
+        conn.commit()
+        cols.add("title")
+        cols.discard("name")
+    for col in ("author", "publisher", "webstore", "location"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE products ADD COLUMN {col} TEXT")
+    conn.commit()
+
+
+def _migrate_products_v4(conn: sqlite3.Connection) -> None:
+    """v4 migration: add storage (INTEGER) column."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
+    if "storage" not in cols:
+        conn.execute("ALTER TABLE products ADD COLUMN storage INTEGER")
+        conn.commit()
 
 
 def _migrate_order_items_snapshot(conn: sqlite3.Connection) -> None:

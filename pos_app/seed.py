@@ -22,54 +22,54 @@ conn.commit()
 print("Database cleared.")
 
 # ── Products — Russian literature ─────────────────────────────────────────────
-# (title, price, stock)
+# (title, author, price, stock)
 PRODUCTS = [
     # Tolstoy
-    ("War and Peace",                          24.99, 45),
-    ("Anna Karenina",                          18.99, 60),
-    ("The Death of Ivan Ilyich",               12.99, 38),
-    ("Resurrection",                           17.99, 30),
+    ("War and Peace",                          "Leo Tolstoy",             24.99, 45),
+    ("Anna Karenina",                          "Leo Tolstoy",             18.99, 60),
+    ("The Death of Ivan Ilyich",               "Leo Tolstoy",             12.99, 38),
+    ("Resurrection",                           "Leo Tolstoy",             17.99, 30),
     # Dostoevsky
-    ("Crime and Punishment",                   16.99, 55),
-    ("The Brothers Karamazov",                 22.99, 40),
-    ("The Idiot",                              17.99, 35),
-    ("Demons",                                 18.99, 32),
-    ("Notes from Underground",                 11.99, 42),
-    ("The Gambler",                            12.99, 28),
+    ("Crime and Punishment",                   "Fyodor Dostoevsky",       16.99, 55),
+    ("The Brothers Karamazov",                 "Fyodor Dostoevsky",       22.99, 40),
+    ("The Idiot",                              "Fyodor Dostoevsky",       17.99, 35),
+    ("Demons",                                 "Fyodor Dostoevsky",       18.99, 32),
+    ("Notes from Underground",                 "Fyodor Dostoevsky",       11.99, 42),
+    ("The Gambler",                            "Fyodor Dostoevsky",       12.99, 28),
     # Chekhov
-    ("The Cherry Orchard",                     12.99, 50),
-    ("Three Sisters",                          11.99, 45),
-    ("The Seagull",                            11.99, 35),
-    ("Uncle Vanya",                            11.99, 30),
-    ("Ward No. 6",                             10.99, 25),
+    ("The Cherry Orchard",                     "Anton Chekhov",           12.99, 50),
+    ("Three Sisters",                          "Anton Chekhov",           11.99, 45),
+    ("The Seagull",                            "Anton Chekhov",           11.99, 35),
+    ("Uncle Vanya",                            "Anton Chekhov",           11.99, 30),
+    ("Ward No. 6",                             "Anton Chekhov",           10.99, 25),
     # Turgenev
-    ("Fathers and Sons",                       14.99, 38),
-    ("First Love",                             10.99, 45),
-    ("Rudin",                                  12.99, 22),
-    ("On the Eve",                             13.99, 20),
+    ("Fathers and Sons",                       "Ivan Turgenev",           14.99, 38),
+    ("First Love",                             "Ivan Turgenev",           10.99, 45),
+    ("Rudin",                                  "Ivan Turgenev",           12.99, 22),
+    ("On the Eve",                             "Ivan Turgenev",           13.99, 20),
     # Gogol
-    ("Dead Souls",                             15.99, 42),
-    ("The Overcoat",                           10.99, 30),
-    ("Taras Bulba",                            13.99, 28),
+    ("Dead Souls",                             "Nikolai Gogol",           15.99, 42),
+    ("The Overcoat",                           "Nikolai Gogol",           10.99, 30),
+    ("Taras Bulba",                            "Nikolai Gogol",           13.99, 28),
     # Bulgakov
-    ("The Master and Margarita",               19.99, 70),
-    ("Heart of a Dog",                         13.99, 55),
+    ("The Master and Margarita",               "Mikhail Bulgakov",        19.99, 70),
+    ("Heart of a Dog",                         "Mikhail Bulgakov",        13.99, 55),
     # Pushkin
-    ("Eugene Onegin",                          13.99, 65),
-    ("The Captain's Daughter",                 12.99, 35),
+    ("Eugene Onegin",                          "Alexander Pushkin",       13.99, 65),
+    ("The Captain's Daughter",                 "Alexander Pushkin",       12.99, 35),
     # Others
-    ("Doctor Zhivago",                         21.99, 48),   # Pasternak
-    ("A Hero of Our Time",                     14.99, 42),   # Lermontov
-    ("Oblomov",                                16.99, 25),   # Goncharov
-    ("One Day in the Life of Ivan Denisovich",  0.00,  0),   # Solzhenitsyn — out of stock demo
+    ("Doctor Zhivago",                         "Boris Pasternak",         21.99, 48),
+    ("A Hero of Our Time",                     "Mikhail Lermontov",       14.99, 42),
+    ("Oblomov",                                "Ivan Goncharov",          16.99, 25),
+    ("One Day in the Life of Ivan Denisovich", "Alexander Solzhenitsyn",   0.00,  0),
 ]
 
 created = []
-for name, price, stock in PRODUCTS:
-    p = pm.create(name, stock=stock, price=price)
+for title, author, price, stock in PRODUCTS:
+    p = pm.create(title, stock=stock, price=price, author=author)
     created.append(p)
     flag = "⚠" if stock == 0 else " "
-    print(f"  {flag} {p['barcode']}  {p['name']:<42}  ${p['price']:.2f}  stock={p['stock']}")
+    print(f"  {flag} {p['barcode']}  {p['title']:<42}  ${p['price']:.2f}  stock={p['stock']}")
 
 print(f"\n{len(created)} products created.")
 
@@ -94,7 +94,7 @@ for days_ago in range(13, -1, -1):
         for p in picks:
             qty       = random.randint(1, 3)
             subtotal += qty * p["price"]
-            line_items.append((p["id"], p["name"], qty, p["price"]))
+            line_items.append((p["id"], p["title"], qty, p["price"]))
 
         cur.execute(
             "INSERT INTO orders (total, created_at) VALUES (?, ?)",

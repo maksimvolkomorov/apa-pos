@@ -1,6 +1,11 @@
 CREATE TABLE IF NOT EXISTS products (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT    NOT NULL,
+    title      TEXT    NOT NULL,
+    author     TEXT,
+    publisher  TEXT,
+    webstore   TEXT,
+    location   TEXT,
+    storage    INTEGER,
     barcode    TEXT    UNIQUE NOT NULL,
     stock      INTEGER NOT NULL DEFAULT 0,
     price      REAL    NOT NULL,
