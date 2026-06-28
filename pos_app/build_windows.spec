@@ -22,9 +22,10 @@ a = Analysis(
     pathex=[os.path.abspath('.')],
     binaries=[],
     datas=[
-        ('assets/logo.png',         'assets'),
-        ('assets/apa-app-logo.png', 'assets'),
-        ('db/schema.sql',           'db'),
+        ('assets/logo.png',            'assets'),
+        ('assets/apa-app-logo.png',    'assets'),
+        ('db/schema.sql',              'db'),
+        ('import_export_config.json',  '.'),
     ],
     hiddenimports=[
         'barcode', 'barcode.writer',
