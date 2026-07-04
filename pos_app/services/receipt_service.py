@@ -60,12 +60,28 @@ def _apply_font_to_styles(styles) -> None:
                 s.fontName = _FONT_REGULAR
 
 
-# Receipt width constants for ZPL (4" @ 203 DPI)
-_ZPL_WIDTH_DOTS = 812
-_FONT_H         = 26   # font height in dots (body text)
-_LINE_H         = 34   # line pitch in dots
-_MARGIN_X       = 20
-_SEP_Y_PAD      = 6    # vertical padding around a separator line
+# ── Physical receipt layout ───────────────────────────────────────────────────
+# Measurements are defined once, in inches, then converted to printer dots
+# (ZPL, via config.ZEBRA_DPI) or PDF points (72/in) below, so a receipt looks
+# the same regardless of which renderer produced it or the printer's DPI.
+_MARGIN_IN     = 0.12
+_TITLE_SIZE_IN = 0.177   # store name
+_ADDR_SIZE_IN  = 0.108   # address / secondary lines
+_BODY_SIZE_IN  = 0.128   # item lines, totals
+_TOTAL_SIZE_IN = 0.148   # TOTAL emphasis line
+_LINE_PITCH_IN = 0.167   # line-to-line vertical pitch
+_SEP_PAD_IN    = 0.030   # padding around a separator rule
+_TOTAL_GAP_IN  = _LINE_PITCH_IN       # extra breathing room before the TOTAL block (one blank line)
+
+_ZPL_WIDTH_DOTS = round(config.RECEIPT_WIDTH_IN * config.ZEBRA_DPI)
+_MARGIN_X       = round(_MARGIN_IN     * config.ZEBRA_DPI)
+_FONT_H         = round(_BODY_SIZE_IN  * config.ZEBRA_DPI)   # font height in dots (body text)
+_LINE_H         = round(_LINE_PITCH_IN * config.ZEBRA_DPI)   # line pitch in dots
+_SEP_Y_PAD      = round(_SEP_PAD_IN    * config.ZEBRA_DPI)
+_TITLE_H        = round(_TITLE_SIZE_IN * config.ZEBRA_DPI)
+_ADDR_H         = round(_ADDR_SIZE_IN  * config.ZEBRA_DPI)
+_TOTAL_H        = round(_TOTAL_SIZE_IN * config.ZEBRA_DPI)
+_TOTAL_GAP      = round(_TOTAL_GAP_IN  * config.ZEBRA_DPI)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -76,8 +92,9 @@ def _fmt_dt(iso: str) -> str:
     except (ValueError, TypeError):
         return iso
 
-# Text receipt width in characters (for PDF/txt)
-_TXT_WIDTH = 42
+# Name-wrap width in characters — sized to the printable width at a rough
+# 0.6x-em average character width, shared by ZPL and the plain-text receipt.
+_TXT_WIDTH = max(20, int((config.RECEIPT_WIDTH_IN - 2 * _MARGIN_IN) / (0.6 * _BODY_SIZE_IN)))
 
 
 def _fit_name(name: str, max_chars: int) -> list[str]:
@@ -144,13 +161,11 @@ def print_receipt(order: dict, items: list[dict]) -> None:
     Dispatch a receipt according to config.RECEIPT_MODE.
     Raises OSError / IOError on failure so the caller can show a warning.
     """
-    mode    = config.RECEIPT_MODE
-    is_gift = order.get("payment_method") == "gift"
+    mode = config.RECEIPT_MODE
 
     if mode == "zebra":
         from services.zebra_service import print_label_usb
-        zpl = build_gift_receipt_zpl(order, items) if is_gift else build_receipt_zpl(order, items)
-        print_label_usb(zpl)
+        print_label_usb(build_receipt_zpl(order, items))
 
     elif mode == "pdf":
         os.makedirs(config.RECEIPT_OUTPUT_DIR, exist_ok=True)
@@ -158,8 +173,7 @@ def print_receipt(order: dict, items: list[dict]) -> None:
             config.RECEIPT_OUTPUT_DIR,
             f"receipt_{order['id']}.pdf",
         )
-        actual_path = (build_gift_receipt_pdf(order, items, requested)
-                       if is_gift else build_receipt_pdf(order, items, requested))
+        actual_path = build_receipt_pdf(order, items, requested)
         _open_file(actual_path)
 
     # "none" → do nothing
@@ -168,9 +182,16 @@ def print_receipt(order: dict, items: list[dict]) -> None:
 # ── ZPL receipt ───────────────────────────────────────────────────────────────
 
 def build_receipt_zpl(order: dict, items: list[dict]) -> str:
-    """Build a ZPL receipt for the Zebra GX420D on 4" continuous paper."""
+    """
+    Build a ZPL receipt for the Zebra printer on 4" continuous paper.
+
+    Gift orders (payment_method == "gift") show a "** GIFT RECEIPT **"
+    banner and skip the Payment/Sales Tax lines, but are otherwise
+    identical — prices, Subtotal, Discount, and TOTAL are always shown.
+    """
+    is_gift  = order.get("payment_method") == "gift"
     sym      = config.CURRENCY_SYMBOL
-    tax_rate = config.TAX_RATE
+    tax_rate = 0.0 if is_gift else config.TAX_RATE
     disc_pct = order.get("discount_pct") or 0.0
     subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
     disc_amt = round(subtotal * disc_pct / 100, 2)
@@ -196,13 +217,20 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     y = 20
 
     # Store name
-    cmd, y = text(y, config.STORE_NAME, font_h=36)
+    cmd, y = text(y, config.STORE_NAME, font_h=_TITLE_H)
     lines.append(cmd)
 
     # Address lines
     for addr_line in config.STORE_ADDRESS:
-        cmd, y = text(y, addr_line, font_h=22)
+        cmd, y = text(y, addr_line, font_h=_ADDR_H)
         lines.append(cmd)
+
+    if is_gift:
+        cmd, y = text(y, "** GIFT RECEIPT **", font_h=_TOTAL_H)
+        lines.append(cmd)
+        if order.get("customer_name"):
+            cmd, y = text(y, f"For: {order['customer_name']}")
+            lines.append(cmd)
 
     # Date + order ID + operator
     dt = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
@@ -213,17 +241,17 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     if order.get("processed_by"):
         cmd, y = text(y, f"Served by: {order['processed_by']}")
         lines.append(cmd)
-    cmd, y = text(y, f"Payment: {(order.get('payment_method') or 'cash').upper()}")
-    lines.append(cmd)
+    if not is_gift:
+        cmd, y = text(y, f"Payment: {(order.get('payment_method') or 'cash').upper()}")
+        lines.append(cmd)
 
     # Separator
     cmd, y = separator(y, thick=2)
     lines.append(cmd)
 
     # Line items — name (up to 2 lines) then indented qty + price line
-    _ZPL_CHARS = 42
     for item in items:
-        name_lines = _fit_name(item["product_name"], _ZPL_CHARS)
+        name_lines = _fit_name(item["product_name"], _TXT_WIDTH)
         qty   = item["quantity"]
         price = item["quantity"] * item["unit_price"]
         for nl in name_lines:
@@ -237,24 +265,27 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     lines.append(cmd)
 
     # Totals
-    cmd, y = text(y, f"{'Subtotal':<28} {sym}{subtotal:>7.2f}")
+    cmd, y = text(y, _total_line("Subtotal", f"{sym}{subtotal:.2f}", _TXT_WIDTH))
     lines.append(cmd)
     if disc_pct:
         label = f"Discount ({disc_pct:.4g}%)"
-        cmd, y = text(y, f"{label:<28}-{sym}{disc_amt:>6.2f}")
+        cmd, y = text(y, _total_line(label, f"-{sym}{disc_amt:.2f}", _TXT_WIDTH))
         lines.append(cmd)
-    cmd, y = text(y, f"{'Sales Tax':<28} {sym}{tax:>7.2f}")
-    lines.append(cmd)
+    if not is_gift:
+        cmd, y = text(y, _total_line("Sales Tax", f"{sym}{tax:.2f}", _TXT_WIDTH))
+        lines.append(cmd)
 
     # Bold separator + TOTAL
     cmd, y = separator(y, thick=2)
     lines.append(cmd)
-    cmd, y = text(y, f"{'TOTAL':<28} {sym}{total:>7.2f}", font_h=30)
+    y += _TOTAL_GAP
+    cmd, y = text(y, _total_line("TOTAL", f"{sym}{total:.2f}", _TXT_WIDTH), font_h=_TOTAL_H)
     lines.append(cmd)
 
     # Footer
     cmd, y = separator(y)
     lines.append(cmd)
+    y += _TOTAL_GAP
     cmd, y = text(y, "Thank you!", font_h=_FONT_H)
     lines.append(cmd)
 
@@ -287,8 +318,9 @@ def build_receipt_pdf(order: dict, items: list[dict], path: str) -> str:
 
 
 def _build_txt(order: dict, items: list[dict], path: str) -> None:
+    is_gift  = order.get("payment_method") == "gift"
     sym      = config.CURRENCY_SYMBOL
-    tax_rate = config.TAX_RATE
+    tax_rate = 0.0 if is_gift else config.TAX_RATE
     disc_pct = order.get("discount_pct") or 0.0
     subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
     disc_amt = round(subtotal * disc_pct / 100, 2)
@@ -307,11 +339,16 @@ def _build_txt(order: dict, items: list[dict], path: str) -> None:
     ]
     for addr_line in config.STORE_ADDRESS:
         receipt_lines.append(addr_line.center(w))
+    if is_gift:
+        receipt_lines.append("** GIFT RECEIPT **".center(w))
+        if order.get("customer_name"):
+            receipt_lines.append(f"For: {order['customer_name']}".center(w))
     receipt_lines.append(dt.center(w))
     receipt_lines.append(f"Order #{order['id']}".center(w))
     if order.get("processed_by"):
         receipt_lines.append(f"Served by: {order['processed_by']}".center(w))
-    receipt_lines.append(f"Payment: {(order.get('payment_method') or 'cash').upper()}".center(w))
+    if not is_gift:
+        receipt_lines.append(f"Payment: {(order.get('payment_method') or 'cash').upper()}".center(w))
     receipt_lines.append(sep_thick)
 
     for item in items:
@@ -327,14 +364,17 @@ def _build_txt(order: dict, items: list[dict], path: str) -> None:
         [_total_line(f"Discount ({disc_pct:.4g}%)", f"-{sym}{disc_amt:.2f}", w)]
         if disc_pct else []
     )
+    tax_lines = [] if is_gift else [_total_line("Sales Tax", f"{sym}{tax:.2f}", w)]
     receipt_lines += [
         sep_thin,
         _total_line("Subtotal", f"{sym}{subtotal:.2f}", w),
         *disc_lines,
-        _total_line("Sales Tax", f"{sym}{tax:.2f}", w),
+        *tax_lines,
         sep_thick,
+        "",
         _total_line("TOTAL", f"{sym}{total:.2f}", w),
         sep_thick,
+        "",
         "Thank you!".center(w),
         "",
     ]
@@ -349,13 +389,13 @@ def _total_line(label: str, value: str, width: int) -> str:
 
 
 def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
+    from reportlab.lib.units import inch
     from reportlab.pdfgen import canvas as rl_canvas
     _register_fonts()
 
+    is_gift  = order.get("payment_method") == "gift"
     sym      = config.CURRENCY_SYMBOL
-    tax_rate = config.TAX_RATE
+    tax_rate = 0.0 if is_gift else config.TAX_RATE
     disc_pct = order.get("discount_pct") or 0.0
     subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
     disc_amt = round(subtotal * disc_pct / 100, 2)
@@ -364,21 +404,28 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
     total    = taxable + tax
     dt       = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
 
-    # Receipt paper: 80 mm wide, auto height
-    page_w   = 80 * mm
-    line_h   = 14
-    margin   = 8 * mm
-    n_lines  = 9 + len(items) * 3 + (1 if disc_pct else 0) + (1 if order.get("processed_by") else 0)
-    page_h   = (n_lines * line_h + 60) * 1.0
+    # Page matches the physical receipt paper width (same constants as ZPL).
+    title_sz = round(_TITLE_SIZE_IN * 72, 1)
+    addr_sz  = round(_ADDR_SIZE_IN  * 72, 1)
+    body_sz  = round(_BODY_SIZE_IN  * 72, 1)
+    total_sz = round(_TOTAL_SIZE_IN * 72, 1)
+    page_w   = config.RECEIPT_WIDTH_IN * inch
+    line_h   = _LINE_PITCH_IN * 72
+    margin   = _MARGIN_IN * inch
+    n_lines  = (9 + len(items) * 3 + (1 if disc_pct else 0)
+                + (1 if order.get("processed_by") else 0)
+                + (1 if is_gift else 0)
+                + (1 if is_gift and order.get("customer_name") else 0))
+    # +2 gaps: one before TOTAL, one before "Thank you!"
+    page_h   = n_lines * line_h + 2 * (_TOTAL_GAP_IN * 72) + 60
 
     c   = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
     y   = page_h - 20
 
-    def draw(txt: str, size: int = 9, bold: bool = False, centre: bool = False):
+    def draw(txt: str, size: float = body_sz, bold: bool = False, centre: bool = False):
         nonlocal y
         c.setFont(_FONT_BOLD if bold else _FONT_REGULAR, size)
         x = margin if not centre else page_w / 2
-        anchor = "left" if not centre else "middle"
         if centre:
             c.drawCentredString(x, y, txt)
         else:
@@ -391,22 +438,27 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
         c.line(margin, y + line_h * 0.4, page_w - margin, y + line_h * 0.4)
         y -= 4
 
-    draw(config.STORE_NAME,        size=13, bold=True, centre=True)
+    draw(config.STORE_NAME,        size=title_sz, bold=True, centre=True)
     for addr_line in config.STORE_ADDRESS:
-        draw(addr_line,            size=8,             centre=True)
-    draw(dt,                       size=9,             centre=True)
-    draw(f"Order #{order['id']}", size=9,              centre=True)
+        draw(addr_line,            size=addr_sz,             centre=True)
+    if is_gift:
+        draw("** GIFT RECEIPT **", size=total_sz, bold=True, centre=True)
+        if order.get("customer_name"):
+            draw(f"For: {order['customer_name']}", size=body_sz, centre=True)
+    draw(dt,                       size=body_sz,             centre=True)
+    draw(f"Order #{order['id']}", size=body_sz,              centre=True)
     if order.get("processed_by"):
-        draw(f"Served by: {order['processed_by']}", size=9, centre=True)
-    draw(f"Payment: {(order.get('payment_method') or 'cash').upper()}", size=9, centre=True)
+        draw(f"Served by: {order['processed_by']}", size=body_sz, centre=True)
+    if not is_gift:
+        draw(f"Payment: {(order.get('payment_method') or 'cash').upper()}", size=body_sz, centre=True)
     hline(thick=1.5)
 
     for item in items:
         max_name_w = page_w - margin * 2
-        name_lines = _fit_name_px(item["product_name"], _FONT_REGULAR, 9, max_name_w)
+        name_lines = _fit_name_px(item["product_name"], _FONT_REGULAR, body_sz, max_name_w)
         qty   = item["quantity"]
         price = item["quantity"] * item["unit_price"]
-        c.setFont(_FONT_REGULAR, 9)
+        c.setFont(_FONT_REGULAR, body_sz)
         for nl in name_lines:
             c.drawString(margin, y, nl)
             y -= line_h
@@ -415,7 +467,7 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
         y -= line_h
 
     hline()
-    c.setFont(_FONT_REGULAR, 9)
+    c.setFont(_FONT_REGULAR, body_sz)
     c.drawString(margin, y, "Subtotal")
     c.drawRightString(page_w - margin, y, f"{sym}{subtotal:.2f}")
     y -= line_h
@@ -423,134 +475,20 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
         c.drawString(margin, y, f"Discount ({disc_pct:.4g}%)")
         c.drawRightString(page_w - margin, y, f"-{sym}{disc_amt:.2f}")
         y -= line_h
-    c.drawString(margin, y, "Sales Tax")
-    c.drawRightString(page_w - margin, y, f"{sym}{tax:.2f}")
-    y -= line_h
+    if not is_gift:
+        c.drawString(margin, y, "Sales Tax")
+        c.drawRightString(page_w - margin, y, f"{sym}{tax:.2f}")
+        y -= line_h
     hline(thick=1.5)
-    c.setFont(_FONT_BOLD, 11)
+    y -= _TOTAL_GAP_IN * 72
+    c.setFont(_FONT_BOLD, total_sz)
     c.drawString(margin, y, "TOTAL")
     c.drawRightString(page_w - margin, y, f"{sym}{total:.2f}")
     y -= line_h
     hline()
-    draw("Thank you!", size=9, centre=True)
+    y -= _TOTAL_GAP_IN * 72
+    draw("Thank you!", size=body_sz, centre=True)
 
-    c.save()
-
-
-# ── Gift receipts ─────────────────────────────────────────────────────────────
-
-def build_gift_receipt_zpl(order: dict, items: list[dict]) -> str:
-    """ZPL gift receipt — items listed, no prices, no totals."""
-    lines: list[str] = []
-
-    def y_next(y): return y + _LINE_H
-
-    def text(y, content, font_h=_FONT_H):
-        cmd = f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FD{content}^FS"
-        return cmd, y_next(y)
-
-    def separator(y, thick=1):
-        cmd = f"^FO{_MARGIN_X},{y + _SEP_Y_PAD}^GB{_ZPL_WIDTH_DOTS - _MARGIN_X * 2},{thick},{thick}^FS"
-        return cmd, y + thick + _SEP_Y_PAD * 2
-
-    y = 20
-    cmd, y = text(y, config.STORE_NAME, font_h=36); lines.append(cmd)
-    for addr_line in config.STORE_ADDRESS:
-        cmd, y = text(y, addr_line, font_h=22); lines.append(cmd)
-
-    cmd, y = text(y, "** GIFT RECEIPT **", font_h=28); lines.append(cmd)
-    dt = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
-    cmd, y = text(y, dt); lines.append(cmd)
-    cmd, y = text(y, f"Order #{order['id']}"); lines.append(cmd)
-    cmd, y = separator(y, thick=2); lines.append(cmd)
-
-    for item in items:
-        for nl in _fit_name(item["product_name"], 42):
-            cmd, y = text(y, nl); lines.append(cmd)
-        cmd, y = text(y, f"  x{item['quantity']}"); lines.append(cmd)
-
-    cmd, y = separator(y); lines.append(cmd)
-    cmd, y = text(y, "Thank you!", font_h=_FONT_H); lines.append(cmd)
-
-    label_height = y + 20
-    header = (f"^XA\n^MNC\n^PW{_ZPL_WIDTH_DOTS}\n^LL{label_height}\n^CI28\n")
-    return header + "\n".join(lines) + "\n^XZ\n"
-
-
-def build_gift_receipt_pdf(order: dict, items: list[dict], path: str) -> str:
-    try:
-        _build_gift_pdf_reportlab(order, items, path)
-        return path
-    except ImportError:
-        txt_path = os.path.splitext(path)[0] + ".txt"
-        _build_gift_txt(order, items, txt_path)
-        return txt_path
-
-
-def _build_gift_txt(order: dict, items: list[dict], path: str) -> None:
-    w  = _TXT_WIDTH
-    dt = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
-    lines = [
-        "=" * w,
-        config.STORE_NAME.center(w),
-        "** GIFT RECEIPT **".center(w),
-        dt.center(w),
-        f"Order #{order['id']}".center(w),
-        "=" * w,
-    ]
-    for item in items:
-        lines.extend(_fit_name(item["product_name"], w))
-        lines.append(f"  x{item['quantity']}")
-    lines += ["=" * w, "Thank you!".center(w), ""]
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines))
-
-
-def _build_gift_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
-    from reportlab.lib.units import mm
-    from reportlab.pdfgen import canvas as rl_canvas
-    _register_fonts()
-
-    page_w  = 80 * mm
-    line_h  = 14
-    margin  = 8 * mm
-    page_h  = (8 + len(items) * 3) * line_h + 60
-    c       = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
-    y       = page_h - 20
-    dt      = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
-
-    def draw(txt, size=9, bold=False, centre=False):
-        nonlocal y
-        c.setFont(_FONT_BOLD if bold else _FONT_REGULAR, size)
-        if centre:
-            c.drawCentredString(page_w / 2, y, txt)
-        else:
-            c.drawString(margin, y, txt)
-        y -= line_h
-
-    def hline(thick=0.5):
-        nonlocal y
-        c.setLineWidth(thick)
-        c.line(margin, y + line_h * 0.4, page_w - margin, y + line_h * 0.4)
-        y -= 4
-
-    draw(config.STORE_NAME, size=13, bold=True, centre=True)
-    for addr_line in config.STORE_ADDRESS:
-        draw(addr_line, size=8, centre=True)
-    draw("** GIFT RECEIPT **", size=11, bold=True, centre=True)
-    draw(dt, centre=True)
-    draw(f"Order #{order['id']}", centre=True)
-    hline(thick=1.5)
-    for item in items:
-        name_lines = _fit_name_px(item["product_name"], _FONT_REGULAR, 9, page_w - margin * 2)
-        c.setFont(_FONT_REGULAR, 9)
-        for nl in name_lines:
-            c.drawString(margin, y, nl)
-            y -= line_h
-        c.drawString(margin, y, f"  x{item['quantity']}")
-        y -= line_h
-    hline()
-    draw("Thank you!", size=9, centre=True)
     c.save()
 
 

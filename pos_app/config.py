@@ -25,6 +25,8 @@ DB_PATH = os.path.join(_BASE, "pos.db")
 # These are the single source of truth. config.ini overrides them at runtime.
 ZEBRA_USB_PATH      = r"\\.\USB001"
 ZEBRA_PRINTER_NAME  = ""   # Windows only — exact printer name in "Devices and Printers"; blank = system default printer
+ZEBRA_DPI           = 300  # printer resolution — 203 for GX420D/GC420D, 300 for ZD421-300dpi etc.
+RECEIPT_WIDTH_IN    = 4.0  # physical width of the loaded receipt paper/label, in inches
 CURRENCY_SYMBOL     = "$"
 TAX_RATE            = 0.0725
 PAGE_SIZE           = 20
@@ -63,10 +65,12 @@ def _write_ini_defaults() -> None:
         "currency_symbol": CURRENCY_SYMBOL,
     }
     cp["printer"] = {
-        "zebra_usb_path":   ZEBRA_USB_PATH,
+        "zebra_usb_path":     ZEBRA_USB_PATH,
         "zebra_printer_name": ZEBRA_PRINTER_NAME,
-        "receipt_mode":     RECEIPT_MODE,
-        "barcode_mode":     BARCODE_MODE,
+        "zebra_dpi":          str(ZEBRA_DPI),
+        "receipt_width_in":   str(RECEIPT_WIDTH_IN),
+        "receipt_mode":       RECEIPT_MODE,
+        "barcode_mode":       BARCODE_MODE,
     }
     cp["admin"] = {
         "pin": ADMIN_PIN,
@@ -86,7 +90,7 @@ def _write_ini_defaults() -> None:
 
 def _read_ini() -> None:
     """Override Python defaults with values from config.ini."""
-    global ZEBRA_USB_PATH, ZEBRA_PRINTER_NAME, CURRENCY_SYMBOL, TAX_RATE, PAGE_SIZE
+    global ZEBRA_USB_PATH, ZEBRA_PRINTER_NAME, ZEBRA_DPI, RECEIPT_WIDTH_IN, CURRENCY_SYMBOL, TAX_RATE, PAGE_SIZE
     global LOW_STOCK_THRESHOLD, WINDOW_WIDTH, WINDOW_HEIGHT
     global RECEIPT_MODE, BARCODE_MODE, STORE_NAME, STORE_ADDRESS, ADMIN_PIN, RESET_DB
 
@@ -113,6 +117,10 @@ def _read_ini() -> None:
         ZEBRA_USB_PATH = cp.get("printer", "zebra_usb_path")
     if cp.has_option("printer", "zebra_printer_name"):
         ZEBRA_PRINTER_NAME = cp.get("printer", "zebra_printer_name")
+    if cp.has_option("printer", "zebra_dpi"):
+        ZEBRA_DPI = cp.getint("printer", "zebra_dpi")
+    if cp.has_option("printer", "receipt_width_in"):
+        RECEIPT_WIDTH_IN = cp.getfloat("printer", "receipt_width_in")
     if cp.has_option("printer", "barcode_mode"):
         BARCODE_MODE = cp.get("printer", "barcode_mode")
     if cp.has_option("admin", "pin"):

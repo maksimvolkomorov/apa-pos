@@ -31,9 +31,29 @@ def _wrap_name(title: str, max_chars: int) -> list[str]:
     return [l1, l2[:max_chars - 3] + "..."]
 
 
+# ── Physical label layout ─────────────────────────────────────────────────────
+# Original design was tuned for a 203 DPI printer; these constants preserve
+# the same physical (inch) proportions at any config.ZEBRA_DPI, and widen the
+# barcode module so the bars scale up to use the label's full width.
+_BC_MARGIN_IN     = 0.148   # 30/203
+_BC_TITLE_SIZE_IN = 0.148   # 30/203
+_BC_PRICE_SIZE_IN = 0.128   # 26/203
+_BC_PITCH_IN      = 0.177   # 36/203
+_BC_BAR_HEIGHT_IN = 0.493   # 100/203
+_BC_MODULE        = 10      # bar (module) width in dots — Zebra firmware caps ^BY's w at 10
+
+_BC_SCALE      = config.ZEBRA_DPI / 203
+_BC_MARGIN     = round(_BC_MARGIN_IN     * config.ZEBRA_DPI)
+_BC_TITLE_H    = round(_BC_TITLE_SIZE_IN * config.ZEBRA_DPI)
+_BC_PRICE_H    = round(_BC_PRICE_SIZE_IN * config.ZEBRA_DPI)
+_BC_PITCH      = round(_BC_PITCH_IN      * config.ZEBRA_DPI)
+_BC_BAR_HEIGHT = round(_BC_BAR_HEIGHT_IN * config.ZEBRA_DPI)
+_BC_WIDTH_DOTS = round(config.RECEIPT_WIDTH_IN * config.ZEBRA_DPI)
+
+
 def build_product_zpl(title: str, barcode: str, price: float | None = None) -> str:
     """
-    Build a ZPL label for the Zebra GX420D on 4" (812-dot @ 203 DPI) paper.
+    Build a ZPL label for the Zebra printer on 4" continuous paper.
 
     Layout (dynamic height):
       - Product title — up to 2 lines, top
@@ -43,22 +63,21 @@ def build_product_zpl(title: str, barcode: str, price: float | None = None) -> s
     name_lines = _wrap_name(title, 28)
     price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
 
-    font_h    = 30
-    pitch     = 36   # dots per name line
-    zpl_lines = ["^XA", "^MNN", "^PW812", "^CI28"]
+    zpl_lines = ["^XA", "^MNN", f"^PW{_BC_WIDTH_DOTS}", "^CI28"]
 
-    y = 15
+    y = round(15 * _BC_SCALE)
     for nl in name_lines:
-        zpl_lines.append(f"^FO30,{y}^A0N,{font_h},{font_h}^FD{nl}^FS")
-        y += pitch
+        zpl_lines.append(f"^FO{_BC_MARGIN},{y}^A0N,{_BC_TITLE_H},{_BC_TITLE_H}^FD{nl}^FS")
+        y += _BC_PITCH
 
-    price_y   = y + 4
-    barcode_y = price_y + 34
-    label_h   = barcode_y + 130   # 100-dot bars + human-readable + bottom margin
+    price_y   = y + round(4 * _BC_SCALE)
+    barcode_y = price_y + round(34 * _BC_SCALE)
+    label_h   = barcode_y + _BC_BAR_HEIGHT + round(30 * _BC_SCALE)   # bars + human-readable text + bottom margin
 
     zpl_lines.append(f"^LL{label_h}")
-    zpl_lines.append(f"^FO30,{price_y}^A0N,26,26^FD{price_line}^FS")
-    zpl_lines.append(f"^FO30,{barcode_y}^BCN,100,Y,N,N^FD{barcode}^FS")
+    zpl_lines.append(f"^FO{_BC_MARGIN},{price_y}^A0N,{_BC_PRICE_H},{_BC_PRICE_H}^FD{price_line}^FS")
+    zpl_lines.append(f"^BY{_BC_MODULE},2,{_BC_BAR_HEIGHT}")
+    zpl_lines.append(f"^FO{_BC_MARGIN},{barcode_y}^BCN,{_BC_BAR_HEIGHT},Y,N,N^FD{barcode}^FS")
     zpl_lines.append("^XZ")
     return "\n".join(zpl_lines) + "\n"
 

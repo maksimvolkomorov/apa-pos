@@ -122,23 +122,26 @@ def barcode_pixel_width(text: str, scale: int = 2) -> int:
 # ── PNG file generation ───────────────────────────────────────────────────────
 
 def generate_barcode_png(barcode: str,
-                         output_dir: str | None = None) -> str:
+                         output_dir: str | None = None,
+                         write_text: bool = True) -> str:
     """
     Generate a Code128B PNG for *barcode*.
 
-    Tries python-barcode + Pillow first; falls back to a pure-stdlib PNG writer.
+    Tries python-barcode + Pillow first; falls back to a pure-stdlib PNG writer
+    (bars only — the fallback never bakes in the human-readable text).
     Returns the absolute path to the PNG file.
     """
     out_dir = output_dir or config.BARCODE_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
-    dest = os.path.join(out_dir, f"{barcode}.png")
+    stem = barcode if write_text else f"{barcode}_notext"
+    dest = os.path.join(out_dir, f"{stem}.png")
 
     # ── primary: python-barcode + Pillow ──────────────────────────────────────
     try:
         import barcode as _bc
         from barcode.writer import ImageWriter
         bc = _bc.get("code128", barcode, writer=ImageWriter())
-        bc.save(os.path.join(out_dir, barcode))   # saves as <barcode>.png
+        bc.save(os.path.join(out_dir, stem), options={"write_text": write_text})
         return dest
     except ImportError:
         pass
@@ -228,14 +231,15 @@ def _print_barcode_pdf(title: str, barcode: str, price: float | None) -> None:
 
     try:
         from reportlab.lib.units import inch
-        from reportlab.lib.utils import ImageReader
         from reportlab.pdfgen import canvas as rl_canvas
+        from services.zebra_service import (_BC_MARGIN_IN, _BC_TITLE_SIZE_IN,
+                                            _BC_PRICE_SIZE_IN, _BC_BAR_HEIGHT_IN)
 
         name_font  = "Helvetica-Bold"
-        name_size  = 11
+        name_size  = round(_BC_TITLE_SIZE_IN * 72, 1)
         line_h     = 0.18 * inch
-        margin     = 0.12 * inch
-        page_w     = 4 * inch
+        margin     = _BC_MARGIN_IN * inch
+        page_w     = config.RECEIPT_WIDTH_IN * inch
         max_name_w = page_w - margin * 2
 
         name_lines = _wrap_pdf_name(title, name_font, name_size, max_name_w)
@@ -253,21 +257,25 @@ def _print_barcode_pdf(title: str, barcode: str, price: float | None) -> None:
 
         if price is not None:
             y -= 0.02 * inch
-            c.setFont("Helvetica", 10)
+            c.setFont("Helvetica", round(_BC_PRICE_SIZE_IN * 72, 1))
             c.drawString(margin, y, f"{config.CURRENCY_SYMBOL}{price:.2f}")
             y -= 0.18 * inch
 
         y -= 0.04 * inch
-        png = generate_barcode_png(barcode)
-        img = ImageReader(png)
-        iw, ih = img.getSize()
-        bar_w = page_w - margin * 2
-        bar_h = bar_w * ih / iw
-        if bar_h > 0.75 * inch:
-            bar_h = 0.75 * inch
-            bar_w = bar_h * iw / ih
-        c.drawImage(png, (page_w - bar_w) / 2, 0.06 * inch,
+        # Bars-only PNG (no baked-in text) — stretching width/height
+        # independently only affects bar height, never the encoded
+        # bar-width ratios, so this is safe and gives a predictable,
+        # full-width label regardless of the source PNG's proportions.
+        # The human-readable text is drawn separately below, undistorted.
+        png = generate_barcode_png(barcode, write_text=False)
+        bar_w  = 0.75 * (page_w - margin * 2)
+        bar_h  = _BC_BAR_HEIGHT_IN * inch
+        text_h = 0.16 * inch
+        bar_y  = 0.06 * inch + text_h
+        c.drawImage(png, (page_w - bar_w) / 2, bar_y,
                     width=bar_w, height=bar_h)
+        c.setFont("Courier", round(_BC_PRICE_SIZE_IN * 72, 1))
+        c.drawCentredString(page_w / 2, 0.06 * inch, barcode)
         c.save()
         actual = pdf_path
 
