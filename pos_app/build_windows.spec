@@ -32,6 +32,7 @@ a = Analysis(
         'PIL', 'PIL.Image',
         'reportlab', 'reportlab.pdfgen',
         'reportlab.lib.pagesizes', 'reportlab.platypus',
+        'win32print', 'win32api', 'win32con', 'pywintypes', 'win32timezone',
     ],
     hookspath=[],
     runtime_hooks=[],

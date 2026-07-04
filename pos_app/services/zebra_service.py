@@ -63,37 +63,83 @@ def build_product_zpl(title: str, barcode: str, price: float | None = None) -> s
     return "\n".join(zpl_lines) + "\n"
 
 
+def _print_raw_windows(data: bytes, printer_name: str | None) -> None:
+    r"""
+    Send raw bytes to a Windows printer via the print spooler (RAW datatype).
+
+    Modern Windows locks \\.\USBxxx ports to the spooler service, so a plain
+    open()/CreateFile from user code no longer works — this goes through
+    win32print instead, which is the supported path regardless of whether
+    the printer is on USB, network, or WSD.
+
+    Raises OSError on failure (mirrors the old file-based API for callers).
+    """
+    try:
+        import win32print
+    except ImportError as exc:
+        raise OSError("pywin32 is required for Windows printing (pip install pywin32)") from exc
+
+    name = printer_name or config.ZEBRA_PRINTER_NAME or win32print.GetDefaultPrinter()
+
+    try:
+        handle = win32print.OpenPrinter(name)
+    except Exception as exc:
+        raise OSError(f"Could not open printer '{name}': {exc}") from exc
+
+    try:
+        job_id = win32print.StartDocPrinter(handle, 1, ("ZPL Label", None, "RAW"))
+        try:
+            win32print.StartPagePrinter(handle)
+            win32print.WritePrinter(handle, data)
+            win32print.EndPagePrinter(handle)
+        finally:
+            win32print.EndDocPrinter(handle)
+    except Exception as exc:
+        raise OSError(f"Print job to '{name}' failed: {exc}") from exc
+    finally:
+        win32print.ClosePrinter(handle)
+
+
 def print_label_usb(zpl: str, usb_path: str | None = None) -> None:
     r"""
-    Write ZPL bytes directly to the Zebra printer via USB.
+    Send ZPL to the Zebra printer.
 
-    usb_path examples:
-      Windows : r'\\.\USB001'  (check Device Manager)
-      macOS   : '/dev/usb/lp0'
+    Windows : sent via the print spooler (config.ZEBRA_PRINTER_NAME, or the
+              Windows default printer if unset).
+    macOS   : written directly to the USB device path, e.g. '/dev/usb/lp0'.
 
-    Raises OSError if the printer path cannot be opened.
+    Raises OSError if the print job cannot be sent.
     """
+    if sys.platform == "win32":
+        _print_raw_windows(zpl.encode("utf-8"), None)
+        return
+
     path = usb_path or config.ZEBRA_USB_PATH
     if not path:
         raise ValueError(
             "No USB printer path configured. "
             "Set ZEBRA_USB_PATH in config.py."
         )
-
-    # On Windows, opening the raw port name requires the \\.\  prefix.
-    # The open() call works the same on both platforms.
     with open(path, "wb") as fh:
         fh.write(zpl.encode("utf-8"))
 
 
 def printer_available(usb_path: str | None = None) -> bool:
-    """Return True if the printer path exists and can be opened for writing."""
+    """Return True if the printer can be opened for writing."""
+    if sys.platform == "win32":
+        try:
+            import win32print
+            name = config.ZEBRA_PRINTER_NAME or win32print.GetDefaultPrinter()
+            handle = win32print.OpenPrinter(name)
+            win32print.ClosePrinter(handle)
+            return True
+        except Exception:
+            return False
+
     path = usb_path or config.ZEBRA_USB_PATH
     if not path:
         return False
     try:
-        # On Windows, just checking os.path.exists() is not reliable for
-        # device paths; attempt a zero-byte write instead.
         with open(path, "wb") as fh:
             fh.write(b"")
         return True

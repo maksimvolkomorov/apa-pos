@@ -24,6 +24,7 @@ DB_PATH = os.path.join(_BASE, "pos.db")
 # ── Defaults ──────────────────────────────────────────────────────────────────
 # These are the single source of truth. config.ini overrides them at runtime.
 ZEBRA_USB_PATH      = r"\\.\USB001"
+ZEBRA_PRINTER_NAME  = ""   # Windows only — exact printer name in "Devices and Printers"; blank = system default printer
 CURRENCY_SYMBOL     = "$"
 TAX_RATE            = 0.0725
 PAGE_SIZE           = 20
@@ -62,9 +63,10 @@ def _write_ini_defaults() -> None:
         "currency_symbol": CURRENCY_SYMBOL,
     }
     cp["printer"] = {
-        "zebra_usb_path": ZEBRA_USB_PATH,
-        "receipt_mode":   RECEIPT_MODE,
-        "barcode_mode":   BARCODE_MODE,
+        "zebra_usb_path":   ZEBRA_USB_PATH,
+        "zebra_printer_name": ZEBRA_PRINTER_NAME,
+        "receipt_mode":     RECEIPT_MODE,
+        "barcode_mode":     BARCODE_MODE,
     }
     cp["admin"] = {
         "pin": ADMIN_PIN,
@@ -84,7 +86,7 @@ def _write_ini_defaults() -> None:
 
 def _read_ini() -> None:
     """Override Python defaults with values from config.ini."""
-    global ZEBRA_USB_PATH, CURRENCY_SYMBOL, TAX_RATE, PAGE_SIZE
+    global ZEBRA_USB_PATH, ZEBRA_PRINTER_NAME, CURRENCY_SYMBOL, TAX_RATE, PAGE_SIZE
     global LOW_STOCK_THRESHOLD, WINDOW_WIDTH, WINDOW_HEIGHT
     global RECEIPT_MODE, BARCODE_MODE, STORE_NAME, STORE_ADDRESS, ADMIN_PIN, RESET_DB
 
@@ -109,6 +111,8 @@ def _read_ini() -> None:
         RECEIPT_MODE = cp.get("receipt", "mode")
     if cp.has_option("printer", "zebra_usb_path"):
         ZEBRA_USB_PATH = cp.get("printer", "zebra_usb_path")
+    if cp.has_option("printer", "zebra_printer_name"):
+        ZEBRA_PRINTER_NAME = cp.get("printer", "zebra_printer_name")
     if cp.has_option("printer", "barcode_mode"):
         BARCODE_MODE = cp.get("printer", "barcode_mode")
     if cp.has_option("admin", "pin"):

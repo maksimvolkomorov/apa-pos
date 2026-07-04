@@ -213,6 +213,8 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     if order.get("processed_by"):
         cmd, y = text(y, f"Served by: {order['processed_by']}")
         lines.append(cmd)
+    cmd, y = text(y, f"Payment: {(order.get('payment_method') or 'cash').upper()}")
+    lines.append(cmd)
 
     # Separator
     cmd, y = separator(y, thick=2)
@@ -309,6 +311,7 @@ def _build_txt(order: dict, items: list[dict], path: str) -> None:
     receipt_lines.append(f"Order #{order['id']}".center(w))
     if order.get("processed_by"):
         receipt_lines.append(f"Served by: {order['processed_by']}".center(w))
+    receipt_lines.append(f"Payment: {(order.get('payment_method') or 'cash').upper()}".center(w))
     receipt_lines.append(sep_thick)
 
     for item in items:
@@ -365,7 +368,7 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
     page_w   = 80 * mm
     line_h   = 14
     margin   = 8 * mm
-    n_lines  = 8 + len(items) * 3 + (1 if disc_pct else 0) + (1 if order.get("processed_by") else 0)
+    n_lines  = 9 + len(items) * 3 + (1 if disc_pct else 0) + (1 if order.get("processed_by") else 0)
     page_h   = (n_lines * line_h + 60) * 1.0
 
     c   = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
@@ -395,6 +398,7 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
     draw(f"Order #{order['id']}", size=9,              centre=True)
     if order.get("processed_by"):
         draw(f"Served by: {order['processed_by']}", size=9, centre=True)
+    draw(f"Payment: {(order.get('payment_method') or 'cash').upper()}", size=9, centre=True)
     hline(thick=1.5)
 
     for item in items:
