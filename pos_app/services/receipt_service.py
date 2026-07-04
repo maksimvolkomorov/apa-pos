@@ -79,58 +79,62 @@ def _fmt_dt(iso: str) -> str:
 # Text receipt width in characters (for PDF/txt)
 _TXT_WIDTH = 42
 
-_VOWELS = set("AEIOU")
 
-
-_STOP_WORDS = {
-    "a", "an", "the", "and", "or", "but",
-    "in", "on", "at", "to", "of", "for",
-    "by", "as", "is", "it", "its", "from",
-    "with", "this", "that",
-}
-
-
-def _clean_name(name: str) -> str:
-    """Keep only alphanumeric chars, strip stop words (articles/prepositions)."""
-    words = ["".join(c for c in w if c.isalnum()) for w in name.split()]
-    filtered = [w for w in words if w and w.lower() not in _STOP_WORDS]
-    return " ".join(filtered).strip()
-
-
-def _abbr_words(name: str) -> str:
-    """Uppercase + drop vowels from every word except the first letter."""
-    words = name.upper().split()
-    return " ".join(w[0] + "".join(c for c in w[1:] if c not in _VOWELS) for w in words)
-
-
-def _abbreviate(name: str, max_chars: int) -> str:
-    """Fit name into max_chars: uppercase → abbreviate → truncate."""
-    name  = _clean_name(name)
-    upper = name.upper()
+def _fit_name(name: str, max_chars: int) -> list[str]:
+    """Fit a product name into at most 2 lines; truncate remainder with '...'."""
+    upper = name.upper().strip()
+    if not upper:
+        return [""]
     if len(upper) <= max_chars:
-        return upper
-    abbreviated = _abbr_words(name)
-    if len(abbreviated) <= max_chars:
-        return abbreviated
-    return abbreviated[: max_chars - 1] + "…"
+        return [upper]
+    words = upper.split()
+    line1: list[str] = []
+    for word in words:
+        if len(" ".join(line1 + [word])) <= max_chars:
+            line1.append(word)
+        else:
+            break
+    l1 = " ".join(line1)
+    l2 = " ".join(words[len(line1):])
+    if not l1:
+        return [upper[:max_chars - 3] + "..."]
+    if not l2:
+        return [l1]
+    if len(l2) <= max_chars:
+        return [l1, l2]
+    return [l1, l2[:max_chars - 3] + "..."]
 
 
-def _abbreviate_px(name: str, font: str, size: float, max_w: float) -> str:
-    """Pixel-accurate version of _abbreviate for proportional fonts (reportlab)."""
+def _fit_name_px(name: str, font: str, size: float, max_w: float) -> list[str]:
+    """Pixel-accurate 2-line fit for proportional fonts (reportlab)."""
     from reportlab.pdfbase.pdfmetrics import stringWidth as sw
-    name  = _clean_name(name)
-    upper = name.upper()
+    upper = name.upper().strip()
+    if not upper:
+        return [""]
     if sw(upper, font, size) <= max_w:
-        return upper
-    abbreviated = _abbr_words(name)
-    if sw(abbreviated, font, size) <= max_w:
-        return abbreviated
-    # Truncate character by character
-    for i in range(len(abbreviated) - 1, 0, -1):
-        candidate = abbreviated[:i] + "…"
-        if sw(candidate, font, size) <= max_w:
-            return candidate
-    return "…"
+        return [upper]
+    words = upper.split()
+    line1: list[str] = []
+    for word in words:
+        if sw(" ".join(line1 + [word]), font, size) <= max_w:
+            line1.append(word)
+        else:
+            break
+    l1 = " ".join(line1)
+    l2 = " ".join(words[len(line1):])
+    if not l1:
+        for i in range(len(upper) - 1, 0, -1):
+            if sw(upper[:i] + "...", font, size) <= max_w:
+                return [upper[:i] + "..."]
+        return ["..."]
+    if not l2:
+        return [l1]
+    if sw(l2, font, size) <= max_w:
+        return [l1, l2]
+    for i in range(len(l2) - 1, 0, -1):
+        if sw(l2[:i] + "...", font, size) <= max_w:
+            return [l1, l2[:i] + "..."]
+    return [l1, "..."]
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -167,9 +171,12 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     """Build a ZPL receipt for the Zebra GX420D on 4" continuous paper."""
     sym      = config.CURRENCY_SYMBOL
     tax_rate = config.TAX_RATE
+    disc_pct = order.get("discount_pct") or 0.0
     subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
-    tax      = round(subtotal * tax_rate, 2)
-    total    = subtotal + tax
+    disc_amt = round(subtotal * disc_pct / 100, 2)
+    taxable  = subtotal - disc_amt
+    tax      = round(taxable * tax_rate, 2)
+    total    = taxable + tax
 
     lines: list[str] = []
 
@@ -197,25 +204,29 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
         cmd, y = text(y, addr_line, font_h=22)
         lines.append(cmd)
 
-    # Date + order ID
+    # Date + order ID + operator
     dt = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
     cmd, y = text(y, dt)
     lines.append(cmd)
     cmd, y = text(y, f"Order #{order['id']}")
     lines.append(cmd)
+    if order.get("processed_by"):
+        cmd, y = text(y, f"Served by: {order['processed_by']}")
+        lines.append(cmd)
 
     # Separator
     cmd, y = separator(y, thick=2)
     lines.append(cmd)
 
-    # Line items — name line then indented qty + price line
+    # Line items — name (up to 2 lines) then indented qty + price line
     _ZPL_CHARS = 42
     for item in items:
-        name  = _abbreviate(item["product_name"], _ZPL_CHARS)
+        name_lines = _fit_name(item["product_name"], _ZPL_CHARS)
         qty   = item["quantity"]
         price = item["quantity"] * item["unit_price"]
-        cmd, y = text(y, name)
-        lines.append(cmd)
+        for nl in name_lines:
+            cmd, y = text(y, nl)
+            lines.append(cmd)
         cmd, y = text(y, f"  x{qty:<3}  {sym}{price:.2f}")
         lines.append(cmd)
 
@@ -226,6 +237,10 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     # Totals
     cmd, y = text(y, f"{'Subtotal':<28} {sym}{subtotal:>7.2f}")
     lines.append(cmd)
+    if disc_pct:
+        label = f"Discount ({disc_pct:.4g}%)"
+        cmd, y = text(y, f"{label:<28}-{sym}{disc_amt:>6.2f}")
+        lines.append(cmd)
     cmd, y = text(y, f"{'Sales Tax':<28} {sym}{tax:>7.2f}")
     lines.append(cmd)
 
@@ -272,9 +287,12 @@ def build_receipt_pdf(order: dict, items: list[dict], path: str) -> str:
 def _build_txt(order: dict, items: list[dict], path: str) -> None:
     sym      = config.CURRENCY_SYMBOL
     tax_rate = config.TAX_RATE
+    disc_pct = order.get("discount_pct") or 0.0
     subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
-    tax      = round(subtotal * tax_rate, 2)
-    total    = subtotal + tax
+    disc_amt = round(subtotal * disc_pct / 100, 2)
+    taxable  = subtotal - disc_amt
+    tax      = round(taxable * tax_rate, 2)
+    total    = taxable + tax
     w        = _TXT_WIDTH
     dt       = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
 
@@ -287,24 +305,29 @@ def _build_txt(order: dict, items: list[dict], path: str) -> None:
     ]
     for addr_line in config.STORE_ADDRESS:
         receipt_lines.append(addr_line.center(w))
-    receipt_lines += [
-        dt.center(w),
-        f"Order #{order['id']}".center(w),
-        sep_thick,
-    ]
+    receipt_lines.append(dt.center(w))
+    receipt_lines.append(f"Order #{order['id']}".center(w))
+    if order.get("processed_by"):
+        receipt_lines.append(f"Served by: {order['processed_by']}".center(w))
+    receipt_lines.append(sep_thick)
 
     for item in items:
-        name  = _abbreviate(item["product_name"], w)
+        name_lines = _fit_name(item["product_name"], w)
         qty   = item["quantity"]
         price = item["quantity"] * item["unit_price"]
         right = f"{sym}{price:.2f}"
-        receipt_lines.append(name)
+        receipt_lines.extend(name_lines)
         gap = w - 2 - len(f"x{qty}") - len(right)
         receipt_lines.append(f"  x{qty}" + " " * max(gap, 1) + right)
 
+    disc_lines = (
+        [_total_line(f"Discount ({disc_pct:.4g}%)", f"-{sym}{disc_amt:.2f}", w)]
+        if disc_pct else []
+    )
     receipt_lines += [
         sep_thin,
         _total_line("Subtotal", f"{sym}{subtotal:.2f}", w),
+        *disc_lines,
         _total_line("Sales Tax", f"{sym}{tax:.2f}", w),
         sep_thick,
         _total_line("TOTAL", f"{sym}{total:.2f}", w),
@@ -330,16 +353,19 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
 
     sym      = config.CURRENCY_SYMBOL
     tax_rate = config.TAX_RATE
+    disc_pct = order.get("discount_pct") or 0.0
     subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
-    tax      = round(subtotal * tax_rate, 2)
-    total    = subtotal + tax
+    disc_amt = round(subtotal * disc_pct / 100, 2)
+    taxable  = subtotal - disc_amt
+    tax      = round(taxable * tax_rate, 2)
+    total    = taxable + tax
     dt       = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
 
     # Receipt paper: 80 mm wide, auto height
     page_w   = 80 * mm
     line_h   = 14
     margin   = 8 * mm
-    n_lines  = 8 + len(items) * 2
+    n_lines  = 8 + len(items) * 3 + (1 if disc_pct else 0) + (1 if order.get("processed_by") else 0)
     page_h   = (n_lines * line_h + 60) * 1.0
 
     c   = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
@@ -367,16 +393,19 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
         draw(addr_line,            size=8,             centre=True)
     draw(dt,                       size=9,             centre=True)
     draw(f"Order #{order['id']}", size=9,              centre=True)
+    if order.get("processed_by"):
+        draw(f"Served by: {order['processed_by']}", size=9, centre=True)
     hline(thick=1.5)
 
     for item in items:
         max_name_w = page_w - margin * 2
-        name  = _abbreviate_px(item["product_name"], _FONT_REGULAR, 9, max_name_w)
+        name_lines = _fit_name_px(item["product_name"], _FONT_REGULAR, 9, max_name_w)
         qty   = item["quantity"]
         price = item["quantity"] * item["unit_price"]
         c.setFont(_FONT_REGULAR, 9)
-        c.drawString(margin, y, name)
-        y -= line_h
+        for nl in name_lines:
+            c.drawString(margin, y, nl)
+            y -= line_h
         c.drawString(margin, y, f"  x{qty}")
         c.drawRightString(page_w - margin, y, f"{sym}{price:.2f}")
         y -= line_h
@@ -386,6 +415,10 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
     c.drawString(margin, y, "Subtotal")
     c.drawRightString(page_w - margin, y, f"{sym}{subtotal:.2f}")
     y -= line_h
+    if disc_pct:
+        c.drawString(margin, y, f"Discount ({disc_pct:.4g}%)")
+        c.drawRightString(page_w - margin, y, f"-{sym}{disc_amt:.2f}")
+        y -= line_h
     c.drawString(margin, y, "Sales Tax")
     c.drawRightString(page_w - margin, y, f"{sym}{tax:.2f}")
     y -= line_h
@@ -428,8 +461,8 @@ def build_gift_receipt_zpl(order: dict, items: list[dict]) -> str:
     cmd, y = separator(y, thick=2); lines.append(cmd)
 
     for item in items:
-        name = _abbreviate(item["product_name"], 42)
-        cmd, y = text(y, name); lines.append(cmd)
+        for nl in _fit_name(item["product_name"], 42):
+            cmd, y = text(y, nl); lines.append(cmd)
         cmd, y = text(y, f"  x{item['quantity']}"); lines.append(cmd)
 
     cmd, y = separator(y); lines.append(cmd)
@@ -462,7 +495,7 @@ def _build_gift_txt(order: dict, items: list[dict], path: str) -> None:
         "=" * w,
     ]
     for item in items:
-        lines.append(_abbreviate(item["product_name"], w))
+        lines.extend(_fit_name(item["product_name"], w))
         lines.append(f"  x{item['quantity']}")
     lines += ["=" * w, "Thank you!".center(w), ""]
     with open(path, "w", encoding="utf-8") as fh:
@@ -477,7 +510,7 @@ def _build_gift_pdf_reportlab(order: dict, items: list[dict], path: str) -> None
     page_w  = 80 * mm
     line_h  = 14
     margin  = 8 * mm
-    page_h  = (8 + len(items) * 2) * line_h + 60
+    page_h  = (8 + len(items) * 3) * line_h + 60
     c       = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
     y       = page_h - 20
     dt      = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
@@ -505,10 +538,11 @@ def _build_gift_pdf_reportlab(order: dict, items: list[dict], path: str) -> None
     draw(f"Order #{order['id']}", centre=True)
     hline(thick=1.5)
     for item in items:
-        name = _abbreviate_px(item["product_name"], _FONT_REGULAR, 9, page_w - margin * 2)
+        name_lines = _fit_name_px(item["product_name"], _FONT_REGULAR, 9, page_w - margin * 2)
         c.setFont(_FONT_REGULAR, 9)
-        c.drawString(margin, y, name)
-        y -= line_h
+        for nl in name_lines:
+            c.drawString(margin, y, nl)
+            y -= line_h
         c.drawString(margin, y, f"  x{item['quantity']}")
         y -= line_h
     hline()

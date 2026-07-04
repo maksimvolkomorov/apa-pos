@@ -7,6 +7,8 @@ Canvas helper : draw Code128B bars directly on a tk.Canvas (no file needed).
 import io
 import os
 import struct
+import subprocess
+import sys
 import zlib
 
 import config
@@ -174,3 +176,107 @@ def _write_png(text: str, path: str, scale: int, bar_height: int) -> None:
 
     with open(path, "wb") as fh:
         fh.write(sig + ihdr + idat + iend)
+
+
+# ── Label printing dispatch ───────────────────────────────────────────────────
+
+def print_barcode_label(title: str, barcode: str,
+                        price: float | None = None) -> None:
+    """Print a barcode label via config.BARCODE_MODE ('zebra', 'pdf', 'none')."""
+    mode = config.BARCODE_MODE
+    if mode == "zebra":
+        from services.zebra_service import build_product_zpl, print_label_usb
+        zpl = build_product_zpl(title, barcode, price)
+        print_label_usb(zpl)
+    elif mode == "pdf":
+        _print_barcode_pdf(title, barcode, price)
+
+
+def _wrap_pdf_name(title: str, font: str, size: float, max_w: float) -> list[str]:
+    """Word-wrap title into at most 2 lines fitting max_w pixels."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth as sw
+    upper = title.upper().strip()
+    if sw(upper, font, size) <= max_w:
+        return [upper]
+    words = upper.split()
+    line1: list[str] = []
+    for word in words:
+        if sw(" ".join(line1 + [word]), font, size) <= max_w:
+            line1.append(word)
+        else:
+            break
+    l1 = " ".join(line1)
+    l2 = " ".join(words[len(line1):])
+    if not l1:
+        for i in range(len(upper) - 1, 0, -1):
+            if sw(upper[:i] + "...", font, size) <= max_w:
+                return [upper[:i] + "..."]
+        return ["..."]
+    if not l2:
+        return [l1]
+    if sw(l2, font, size) <= max_w:
+        return [l1, l2]
+    for i in range(len(l2) - 1, 0, -1):
+        if sw(l2[:i] + "...", font, size) <= max_w:
+            return [l1, l2[:i] + "..."]
+    return [l1, "..."]
+
+
+def _print_barcode_pdf(title: str, barcode: str, price: float | None) -> None:
+    os.makedirs(config.BARCODE_OUTPUT_DIR, exist_ok=True)
+    pdf_path = os.path.join(config.BARCODE_OUTPUT_DIR, f"label_{barcode}.pdf")
+
+    try:
+        from reportlab.lib.units import inch
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas as rl_canvas
+
+        name_font  = "Helvetica-Bold"
+        name_size  = 11
+        line_h     = 0.18 * inch
+        margin     = 0.12 * inch
+        page_w     = 4 * inch
+        max_name_w = page_w - margin * 2
+
+        name_lines = _wrap_pdf_name(title, name_font, name_size, max_name_w)
+        n_name     = len(name_lines)
+
+        # Height: name lines + price + barcode + margins
+        page_h = (n_name * line_h) + 0.22 * inch + 0.85 * inch + 0.12 * inch
+        c = rl_canvas.Canvas(pdf_path, pagesize=(page_w, page_h))
+
+        y = page_h - 0.16 * inch
+        c.setFont(name_font, name_size)
+        for nl in name_lines:
+            c.drawString(margin, y, nl)
+            y -= line_h
+
+        if price is not None:
+            y -= 0.02 * inch
+            c.setFont("Helvetica", 10)
+            c.drawString(margin, y, f"{config.CURRENCY_SYMBOL}{price:.2f}")
+            y -= 0.18 * inch
+
+        y -= 0.04 * inch
+        png = generate_barcode_png(barcode)
+        img = ImageReader(png)
+        iw, ih = img.getSize()
+        bar_w = page_w - margin * 2
+        bar_h = bar_w * ih / iw
+        if bar_h > 0.75 * inch:
+            bar_h = 0.75 * inch
+            bar_w = bar_h * iw / ih
+        c.drawImage(png, (page_w - bar_w) / 2, 0.06 * inch,
+                    width=bar_w, height=bar_h)
+        c.save()
+        actual = pdf_path
+
+    except ImportError:
+        actual = generate_barcode_png(barcode)
+
+    if sys.platform == "win32":
+        os.startfile(actual)
+    elif sys.platform == "darwin":
+        subprocess.run(["open", actual], check=False)
+    else:
+        subprocess.run(["xdg-open", actual], check=False)

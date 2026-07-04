@@ -8,27 +8,59 @@ import sys
 import config
 
 
-def build_product_zpl(title: str, barcode: str) -> str:
+def _wrap_name(title: str, max_chars: int) -> list[str]:
+    """Word-wrap title into at most 2 lines of max_chars; truncate with '...'."""
+    upper = title.upper().strip()
+    if len(upper) <= max_chars:
+        return [upper]
+    words = upper.split()
+    line1: list[str] = []
+    for word in words:
+        if len(" ".join(line1 + [word])) <= max_chars:
+            line1.append(word)
+        else:
+            break
+    l1 = " ".join(line1)
+    l2 = " ".join(words[len(line1):])
+    if not l1:
+        return [upper[:max_chars - 3] + "..."]
+    if not l2:
+        return [l1]
+    if len(l2) <= max_chars:
+        return [l1, l2]
+    return [l1, l2[:max_chars - 3] + "..."]
+
+
+def build_product_zpl(title: str, barcode: str, price: float | None = None) -> str:
     """
     Build a ZPL label for the Zebra GX420D on 4" (812-dot @ 203 DPI) paper.
 
-    Layout (approx 1.5" / 305 dots tall):
-      - Product title — top, large scalable font
-      - Code128 bars  — middle
-      - Human-readable barcode string — printed by ^BC automatically
+    Layout (dynamic height):
+      - Product title — up to 2 lines, top
+      - Price         — below title (when provided)
+      - Code128 bars  — middle, with human-readable text
     """
-    display_name = title if len(title) <= 28 else title[:25] + "…"
+    name_lines = _wrap_name(title, 28)
+    price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
 
-    return (
-        "^XA\n"
-        "^MNN\n"             # non-continuous media (gap/web sensing) for label stock
-        "^PW812\n"           # print width: 4 in = 812 dots
-        "^LL305\n"           # label length: ~1.5 in = 305 dots
-        "^CI28\n"            # UTF-8 encoding
-        f"^FO30,18^A0N,38,38^FD{display_name}^FS\n"   # name
-        f"^FO30,72^BCN,100,Y,N,N^FD{barcode}^FS\n"    # Code128, 100-dot bars, human-readable
-        "^XZ\n"
-    )
+    font_h    = 30
+    pitch     = 36   # dots per name line
+    zpl_lines = ["^XA", "^MNN", "^PW812", "^CI28"]
+
+    y = 15
+    for nl in name_lines:
+        zpl_lines.append(f"^FO30,{y}^A0N,{font_h},{font_h}^FD{nl}^FS")
+        y += pitch
+
+    price_y   = y + 4
+    barcode_y = price_y + 34
+    label_h   = barcode_y + 130   # 100-dot bars + human-readable + bottom margin
+
+    zpl_lines.append(f"^LL{label_h}")
+    zpl_lines.append(f"^FO30,{price_y}^A0N,26,26^FD{price_line}^FS")
+    zpl_lines.append(f"^FO30,{barcode_y}^BCN,100,Y,N,N^FD{barcode}^FS")
+    zpl_lines.append("^XZ")
+    return "\n".join(zpl_lines) + "\n"
 
 
 def print_label_usb(zpl: str, usb_path: str | None = None) -> None:

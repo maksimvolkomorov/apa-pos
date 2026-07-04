@@ -362,7 +362,7 @@ class StockView(tk.Frame):
         styled_button(bot, "+ Add Product",      self._add,          bg=BTN_OK   ).pack(side="left", padx=4)
         self._btn_edit   = styled_button(bot, "Edit Selected",   self._edit,      )
         self._btn_delete = styled_button(bot, "Delete Selected", self._delete,    bg=BTN_DNG)
-        self._btn_bc     = styled_button(bot, "Print Barcode",   self._print_bc,  bg="#8E44AD", fg="#1C1C1C")
+        self._btn_bc     = styled_button(bot, "Barcode",          self._print_bc,  bg="#8E44AD", fg="#1C1C1C")
         self._btn_edit  .pack(side="left", padx=4)
         self._btn_delete.pack(side="left", padx=4)
         self._btn_bc    .pack(side="left", padx=4)
@@ -631,13 +631,13 @@ class StockView(tk.Frame):
 
     def _show_print_dialog(self, p: dict):
         win = tk.Toplevel(self)
-        win.title("Print Barcode")
+        win.title("Barcode")
         win.configure(bg=BG)
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="Print Barcode Label",
+        tk.Label(win, text="Barcode Label",
                  bg=HEADER_BG, fg=HEADER_FG,
                  font=("Helvetica", 12, "bold"), pady=8).pack(fill="x")
 
@@ -662,10 +662,10 @@ class StockView(tk.Frame):
         status.pack(pady=(0, 4))
 
         def do_print():
-            zpl = zebra_service.build_product_zpl(p["title"], p["barcode"])
             try:
-                zebra_service.print_label_usb(zpl)
-                status.config(text="✓ Sent to printer.", fg="#27AE60")
+                barcode_service.print_barcode_label(
+                    p["title"], p["barcode"], p.get("price"))
+                status.config(text="✓ Done.", fg="#27AE60")
             except OSError as e:
                 status.config(text=f"Printer error: {e}", fg="#E74C3C")
 

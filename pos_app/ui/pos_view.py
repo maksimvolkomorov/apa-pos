@@ -407,7 +407,7 @@ class POSView(tk.Frame):
         name_container = tk.Frame(dlg, bg=BG)
         name_container.pack(anchor="w", fill="x", **pad)
         name_frame = tk.Frame(name_container, bg=BG)
-        tk.Label(name_frame, text="Customer name:", bg=BG,
+        tk.Label(name_frame, text="Recipient name:", bg=BG,
                  font=("Helvetica", 10)).pack(anchor="w", pady=(12, 2))
         customer_var = tk.StringVar()
         tk.Entry(name_frame, textvariable=customer_var, width=28,
@@ -418,7 +418,7 @@ class POSView(tk.Frame):
             for k, b in method_btns.items():
                 b.config(bg="#2E6DA4" if k == m else "#D0D0D0",
                          fg="white"   if k == m else "#1C1C1C")
-            if m == "check":
+            if m == "gift":
                 name_frame.pack(anchor="w")
             else:
                 name_frame.pack_forget()
@@ -437,8 +437,8 @@ class POSView(tk.Frame):
         btn_row.pack(pady=(20, 16), **pad)
 
         def _confirm():
-            if method_var.get() == "check" and not customer_var.get().strip():
-                messagebox.showwarning("Required", "Please enter the customer name for check payment.", parent=dlg)
+            if method_var.get() == "gift" and not customer_var.get().strip():
+                messagebox.showwarning("Required", "Please enter the recipient name for a gift.", parent=dlg)
                 return
             pb = user_var.get() or None
             if pb:

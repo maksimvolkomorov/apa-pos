@@ -31,6 +31,7 @@ LOW_STOCK_THRESHOLD = 5
 WINDOW_WIDTH        = 1920
 WINDOW_HEIGHT       = 1080
 RECEIPT_MODE        = "pdf"
+BARCODE_MODE        = "zebra"
 STORE_NAME          = "Store name"
 STORE_ADDRESS       = [
     "1234 Main Street",
@@ -60,11 +61,10 @@ def _write_ini_defaults() -> None:
         "rate": str(TAX_RATE),
         "currency_symbol": CURRENCY_SYMBOL,
     }
-    cp["receipt"] = {
-        "mode": RECEIPT_MODE,
-    }
     cp["printer"] = {
         "zebra_usb_path": ZEBRA_USB_PATH,
+        "receipt_mode":   RECEIPT_MODE,
+        "barcode_mode":   BARCODE_MODE,
     }
     cp["admin"] = {
         "pin": ADMIN_PIN,
@@ -86,7 +86,7 @@ def _read_ini() -> None:
     """Override Python defaults with values from config.ini."""
     global ZEBRA_USB_PATH, CURRENCY_SYMBOL, TAX_RATE, PAGE_SIZE
     global LOW_STOCK_THRESHOLD, WINDOW_WIDTH, WINDOW_HEIGHT
-    global RECEIPT_MODE, STORE_NAME, STORE_ADDRESS, ADMIN_PIN, RESET_DB
+    global RECEIPT_MODE, BARCODE_MODE, STORE_NAME, STORE_ADDRESS, ADMIN_PIN, RESET_DB
 
     cp = configparser.ConfigParser()
     cp.read(_INI_PATH, encoding="utf-8")
@@ -103,10 +103,14 @@ def _read_ini() -> None:
         TAX_RATE = cp.getfloat("tax", "rate")
     if cp.has_option("tax", "currency_symbol"):
         CURRENCY_SYMBOL = cp.get("tax", "currency_symbol")
-    if cp.has_option("receipt", "mode"):
+    if cp.has_option("printer", "receipt_mode"):
+        RECEIPT_MODE = cp.get("printer", "receipt_mode")
+    elif cp.has_option("receipt", "mode"):
         RECEIPT_MODE = cp.get("receipt", "mode")
     if cp.has_option("printer", "zebra_usb_path"):
         ZEBRA_USB_PATH = cp.get("printer", "zebra_usb_path")
+    if cp.has_option("printer", "barcode_mode"):
+        BARCODE_MODE = cp.get("printer", "barcode_mode")
     if cp.has_option("admin", "pin"):
         ADMIN_PIN = cp.get("admin", "pin")
     if cp.has_option("ui", "page_size"):
