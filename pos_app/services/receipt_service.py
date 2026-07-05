@@ -75,6 +75,13 @@ _SEP_PAD_IN    = 0.030   # padding around a separator rule
 _TOTAL_GAP_IN  = _LINE_PITCH_IN       # extra breathing room before the TOTAL block (one blank line)
 _TOP_GAP_IN    = 1.0                  # blank space at the very top of the receipt, in inches
 
+# Line pitch as a multiple of the line's own font size (derived from body
+# text, where 0.167in pitch / 0.128in size ≈ 1.3x). Applying this ratio to
+# every size — not just body — keeps a line's own font (ascent+descent)
+# inside its pitch, so a taller line (e.g. the title) never crowds the
+# line below it.
+_LINE_PITCH_RATIO = _LINE_PITCH_IN / _BODY_SIZE_IN
+
 _ZPL_WIDTH_DOTS = round(config.RECEIPT_WIDTH_IN * config.ZEBRA_DPI)
 _MARGIN_X       = round(_MARGIN_IN     * config.ZEBRA_DPI)
 _FONT_H         = round(_BODY_SIZE_IN  * config.ZEBRA_DPI)   # font height in dots (body text)
@@ -314,6 +321,7 @@ def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
         return ImageFont.truetype(path, size) if path else ImageFont.load_default()
 
     size_px    = {"title": _TITLE_H, "addr": _ADDR_H, "body": _FONT_H, "total": _TOTAL_H}
+    pitch_px   = {k: round(v * _LINE_PITCH_RATIO) for k, v in size_px.items()}
     font_cache: dict[tuple[str, bool], object] = {}
 
     def get_font(size_key: str, bold: bool):
@@ -364,13 +372,13 @@ def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
             fnt = get_font(instr.size, instr.bold)
             w = draw.textlength(instr.text, font=fnt)
             draw.text(((width - w) / 2, y), instr.text, font=fnt, fill=0)
-            y += _LINE_H
+            y += pitch_px[instr.size]
         elif isinstance(instr, Pair):
             fnt = get_font(instr.size, instr.bold)
             draw.text((_MARGIN_X, y), instr.left, font=fnt, fill=0)
             rw = draw.textlength(instr.right, font=fnt)
             draw.text((width - _MARGIN_X - rw, y), instr.right, font=fnt, fill=0)
-            y += _LINE_H
+            y += pitch_px[instr.size]
         elif isinstance(instr, Rule):
             thick = 2 if instr.thick else 1
             top = y + _SEP_Y_PAD
@@ -416,12 +424,12 @@ def _build_receipt_zpl_fields(order: dict, items: list[dict]) -> str:
     def emit_center(text: str, font_h: int) -> None:
         nonlocal y
         lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FB{block_w},1,0,C^FD{text}^FS")
-        y += _LINE_H
+        y += round(font_h * _LINE_PITCH_RATIO)
 
     def emit_left(text: str, font_h: int) -> None:
         nonlocal y
         lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FD{text}^FS")
-        y += _LINE_H
+        y += round(font_h * _LINE_PITCH_RATIO)
 
     def emit_pair(left: str, right: str, font_h: int) -> None:
         """^A0N is proportional, not monospace — ^FB's right-justify (not
@@ -430,7 +438,7 @@ def _build_receipt_zpl_fields(order: dict, items: list[dict]) -> str:
         nonlocal y
         lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FD{left}^FS")
         lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FB{block_w},1,0,R^FD{right}^FS")
-        y += _LINE_H
+        y += round(font_h * _LINE_PITCH_RATIO)
 
     def emit_rule(thick: bool) -> None:
         nonlocal y
@@ -583,7 +591,7 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
         elif isinstance(instr, Gap):
             content_h += _TOTAL_GAP_IN * 72
         else:
-            content_h += line_h
+            content_h += size_map[instr.size] * _LINE_PITCH_RATIO
     page_h = content_h + 40 + _TOP_GAP_PT   # 20pt top margin + 20pt bottom margin + top gap
 
     c = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
@@ -593,14 +601,14 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
         nonlocal y
         c.setFont(_FONT_BOLD if bold else _FONT_REGULAR, size)
         c.drawCentredString(page_w / 2, y, text)
-        y -= line_h
+        y -= size * _LINE_PITCH_RATIO
 
     def draw_pair(left: str, right: str, size: float, bold: bool = False):
         nonlocal y
         c.setFont(_FONT_BOLD if bold else _FONT_REGULAR, size)
         c.drawString(margin, y, left)
         c.drawRightString(page_w - margin, y, right)
-        y -= line_h
+        y -= size * _LINE_PITCH_RATIO
 
     def draw_rule(thick: bool):
         nonlocal y
