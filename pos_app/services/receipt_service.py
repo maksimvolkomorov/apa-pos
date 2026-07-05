@@ -65,7 +65,7 @@ def _apply_font_to_styles(styles) -> None:
 # Measurements are defined once, in inches, then converted to printer dots
 # (ZPL, via config.ZEBRA_DPI) or PDF points (72/in) below, so a receipt looks
 # the same regardless of which renderer produced it or the printer's DPI.
-_MARGIN_IN     = 0.12
+_MARGIN_IN     = config.RECEIPT_WIDTH_IN * 0.10   # 10% of receipt width, left/right each
 _TITLE_SIZE_IN = 0.177   # store name
 _ADDR_SIZE_IN  = 0.108   # address / secondary lines
 _BODY_SIZE_IN  = 0.128   # item lines, totals
@@ -771,6 +771,93 @@ def build_detailed_report_pdf(orders: list[dict],
         raise RuntimeError("reportlab is required for PDF reports.")
 
 
+def build_detailed_report_xlsx(orders: list[dict],
+                                date_from: str | None,
+                                date_to:   str | None) -> str:
+    """Generate a detailed per-order report XLSX, open it, and return the path."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    from models import order as order_model
+
+    os.makedirs(config.RECEIPT_OUTPUT_DIR, exist_ok=True)
+    now  = datetime.now()
+    stem = f"detailed_report_{now.strftime('%Y%m%d_%H%M%S')}"
+    path = os.path.join(config.RECEIPT_OUTPUT_DIR, stem + ".xlsx")
+    sym    = config.CURRENCY_SYMBOL
+    period = f"{date_from or 'All'} - {date_to or 'All'}"
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Detailed Report"
+
+    ws.append(["DETAILED SALES REPORT"])
+    ws.append([config.STORE_NAME])
+    ws.append([f"Period: {period}"])
+    ws.append([_fmt_dt(now.strftime("%Y-%m-%d %H:%M"))])
+    ws.append([])
+
+    hdr_fill  = PatternFill("solid", fgColor="2980B9")
+    item_fill = PatternFill("solid", fgColor="ECF0F1")
+    hdr_font  = Font(color="FFFFFF", bold=True)
+    bold_font = Font(bold=True)
+
+    grand_sub = grand_disc = grand_tax = grand_total = 0.0
+
+    for o in orders:
+        items    = order_model.get_items(o["id"])
+        sub      = sum(i["quantity"] * i["unit_price"] for i in items)
+        disc     = o.get("discount_pct") or 0
+        disc_amt = round(sub * disc / 100, 2)
+        tax      = round((sub - disc_amt) * config.TAX_RATE, 2)
+        total    = o["total"]
+        method   = (o.get("payment_method") or "cash").upper()
+        by       = o.get("processed_by") or "—"
+
+        grand_sub   += sub
+        grand_disc  += disc_amt
+        grand_tax   += tax
+        grand_total += total
+
+        ws.append([f"Order #{o['id']}", _fmt_dt(o["created_at"]), method,
+                   f"By: {by}", f"Total: {sym}{total:.2f}"])
+        for cell in ws[ws.max_row]:
+            cell.fill = hdr_fill
+            cell.font = hdr_font
+
+        ws.append(["Product", "Qty", "Unit Price", "Line Total"])
+        for cell in ws[ws.max_row]:
+            cell.fill = item_fill
+            cell.font = bold_font
+
+        for item in items:
+            line = item["quantity"] * item["unit_price"]
+            ws.append([item["product_name"], item["quantity"],
+                       item["unit_price"], line])
+
+        disc_str = f"  disc {disc:.4g}%  -{sym}{disc_amt:.2f}" if disc else ""
+        ws.append([f"Subtotal{disc_str}", "", f"Tax {sym}{tax:.2f}", total])
+        for cell in ws[ws.max_row]:
+            cell.font = bold_font
+        ws.append([])
+
+    ws.append(["", "", "Orders:", len(orders)])
+    ws.append(["", "", "Subtotal:", grand_sub])
+    ws.append(["", "", "Discounts:", -grand_disc])
+    ws.append(["", "", "Tax:", grand_tax])
+    ws.append(["", "", "Total Revenue:", grand_total])
+    for r in range(ws.max_row - 4, ws.max_row + 1):
+        for cell in ws[r]:
+            cell.font = bold_font
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value)) if c.value else 0) for c in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 50)
+
+    wb.save(path)
+    _open_file(path)
+    return path
+
+
 # ── Sales report ─────────────────────────────────────────────────────────────
 
 def build_sales_report_pdf(orders: list[dict],
@@ -795,6 +882,62 @@ def build_sales_report_pdf(orders: list[dict],
 
     _open_file(actual)
     return actual
+
+
+def build_sales_report_xlsx(orders: list[dict],
+                             date_from: str | None,
+                             date_to:   str | None) -> str:
+    """Generate a sales report XLSX for the given orders, open it, and return the path."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    os.makedirs(config.RECEIPT_OUTPUT_DIR, exist_ok=True)
+    now  = datetime.now()
+    stem = f"sales_report_{now.strftime('%Y%m%d_%H%M%S')}"
+    path = os.path.join(config.RECEIPT_OUTPUT_DIR, stem + ".xlsx")
+    period = f"{date_from or 'All'} - {date_to or 'All'}"
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sales Report"
+
+    ws.append(["SALES REPORT"])
+    ws.append([config.STORE_NAME])
+    ws.append([f"Period: {period}"])
+    ws.append([_fmt_dt(now.strftime("%Y-%m-%d %H:%M"))])
+    ws.append([])
+
+    ws.append(["ID", "Date / Time", "Processed By", "Payment", "Items",
+               "Subtotal", "Discount", "Tax", "Total"])
+    hdr_fill = PatternFill("solid", fgColor="2980B9")
+    hdr_font = Font(color="FFFFFF", bold=True)
+    for cell in ws[ws.max_row]:
+        cell.fill = hdr_fill
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center")
+
+    tot_items = tot_sub = tot_disc = tot_tax = tot_total = 0.0
+    for o in orders:
+        cnt, sub, disc, tax, total = _sales_order_row(o)
+        method = (o.get("payment_method") or "cash").upper()
+        by     = o.get("processed_by") or "—"
+        dt     = _fmt_dt(o.get("created_at") or "")
+        ws.append([o["id"], dt, by, method, cnt, sub, disc, tax, total])
+        tot_items += cnt; tot_sub += sub; tot_disc += disc
+        tot_tax   += tax; tot_total += total
+
+    ws.append([f"{len(orders)} orders", "", "", "", tot_items,
+               tot_sub, tot_disc, tot_tax, tot_total])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value)) if c.value else 0) for c in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
+    wb.save(path)
+    _open_file(path)
+    return path
 
 
 def _sales_order_row(order: dict) -> tuple:

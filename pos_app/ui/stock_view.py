@@ -4,7 +4,7 @@ from tkinter import messagebox, ttk
 
 import config
 from models import product as product_model
-from services import barcode_service, zebra_service, receipt_service
+from services import barcode_service, receipt_service
 from ui.theme import (
     BG, BTN_BG, BTN_FG, BTN_DNG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
     TROW_ALT, TROW_LOW, TROW_WARN, NAV_ACT,

@@ -1,8 +1,9 @@
-"""Barcode generation service.
+"""Barcode generation and product label printing service.
 
 Primary path  : python-barcode + Pillow (PNG file) — if installed.
 Fallback path : pure-Python Code128B encoder → PNG via stdlib zlib/struct.
 Canvas helper : draw Code128B bars directly on a tk.Canvas (no file needed).
+Label printing: ZPL (via services.zebra_service) or PDF, per config.BARCODE_MODE.
 """
 import io
 import os
@@ -181,6 +182,138 @@ def _write_png(text: str, path: str, scale: int, bar_height: int) -> None:
         fh.write(sig + ihdr + idat + iend)
 
 
+# ── ZPL label building ────────────────────────────────────────────────────────
+# Original design was tuned for a 203 DPI printer; these constants preserve
+# the same physical (inch) proportions at any config.ZEBRA_DPI, and widen the
+# barcode module so the bars scale up to use the label's full width.
+_BC_MARGIN_IN     = 0.148   # 30/203
+_BC_TITLE_SIZE_IN = 0.128   # matches _BC_PRICE_SIZE_IN — product name uses the same size/style as price
+_BC_PRICE_SIZE_IN = 0.128   # 26/203
+_BC_PITCH_IN      = 0.177   # 36/203
+_BC_BAR_HEIGHT_IN = 0.493   # 100/203
+_BC_MODULE        = 10      # bar (module) width in dots — Zebra firmware caps ^BY's w at 10
+
+_BC_SCALE      = config.ZEBRA_DPI / 203
+_BC_MARGIN     = round(_BC_MARGIN_IN     * config.ZEBRA_DPI)
+_BC_TITLE_H    = round(_BC_TITLE_SIZE_IN * config.ZEBRA_DPI)
+_BC_PRICE_H    = round(_BC_PRICE_SIZE_IN * config.ZEBRA_DPI)
+_BC_PITCH      = round(_BC_PITCH_IN      * config.ZEBRA_DPI)
+_BC_BAR_HEIGHT = round(_BC_BAR_HEIGHT_IN * config.ZEBRA_DPI)
+_BC_WIDTH_DOTS  = round(config.BARCODE_WIDTH_IN  * config.ZEBRA_DPI)
+_BC_HEIGHT_DOTS = round(config.BARCODE_HEIGHT_IN * config.ZEBRA_DPI)
+
+_BC_TITLE_MAX_CHARS = 28   # chars that fit on one line at full title size
+
+def _fit_name_1line(title: str, base_size: float) -> tuple[str, float]:
+    """Single-line product name; shrink font size proportionally if too long to fit. Shared by the ZPL and PDF label builders."""
+    upper = title.upper().strip()
+    if len(upper) <= _BC_TITLE_MAX_CHARS:
+        return upper, base_size
+    return upper, base_size * _BC_TITLE_MAX_CHARS / len(upper)
+
+
+def build_product_zpl(title: str, barcode: str, price: float | None = None) -> str:
+    """
+    Build a ZPL barcode label for the Zebra printer on gapped label stock.
+
+    Renders the label as a bitmap (Pillow) and embeds it via ^GF — draws
+    the Code128 bars directly at whatever width we choose, with no ^BY
+    10-dot firmware cap. Falls back to plain ZPL field commands (native
+    ^BCN barcode, capped bar width) if Pillow isn't installed.
+    """
+    try:
+        return _build_product_zpl_image(title, barcode, price)
+    except ImportError:
+        return _build_product_zpl_fields(title, barcode, price)
+
+
+def _build_product_zpl_image(title: str, barcode: str, price: float | None) -> str:
+    from PIL import Image, ImageDraw, ImageFont
+    from services.zebra_service import find_ttf_fonts, image_to_zpl_gf
+
+    name, title_h = _fit_name_1line(title, _BC_TITLE_H)
+    title_h = max(1, round(title_h))
+    price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
+
+    reg_path, bold_path = find_ttf_fonts()
+
+    def font(size: int, bold: bool = False):
+        path = (bold_path or reg_path) if bold else reg_path
+        return ImageFont.truetype(path, size) if path else ImageFont.load_default()
+
+    f_title = font(title_h)
+    f_price = font(_BC_PRICE_H)
+    f_num   = font(round(_BC_PRICE_H * 0.85))
+
+    width = _BC_WIDTH_DOTS
+    img   = Image.new("L", (width, 2000), 255)   # generous height; cropped below
+    draw  = ImageDraw.Draw(img)
+
+    y = round(15 * _BC_SCALE)
+    draw.text((_BC_MARGIN, y), name, font=f_title, fill=0)
+    y += _BC_PITCH
+
+    if price_line:
+        y += round(4 * _BC_SCALE)
+        draw.text((_BC_MARGIN, y), price_line, font=f_price, fill=0)
+    y += round(38 * _BC_SCALE)
+
+    # Code128 bars, drawn at an explicit target width — no firmware cap.
+    bars       = _bar_units(barcode)
+    total_units = sum(u for _, u in bars)
+    max_bar_w  = 0.75 * (width - _BC_MARGIN * 2)
+    scale      = max_bar_w / total_units
+
+    cx = _BC_MARGIN
+    bar_top = y
+    for is_black, units in bars:
+        w = units * scale
+        if is_black:
+            draw.rectangle([cx, bar_top, cx + w, bar_top + _BC_BAR_HEIGHT], fill=0)
+        cx += w
+    y = bar_top + _BC_BAR_HEIGHT + round(6 * _BC_SCALE)
+
+    num_w = draw.textlength(barcode, font=f_num)
+    draw.text(((width - num_w) / 2, y), barcode, font=f_num, fill=0)
+    y += round(_BC_PRICE_H * 0.85) + round(15 * _BC_SCALE)
+
+    # Crop to the label's fixed physical height (not the content height) —
+    # the printer is told the true, constant label pitch below (^LL) so it
+    # stays in registration with the die-cut gaps on gapped label stock;
+    # content that overflows the physical label is clipped rather than
+    # silently growing the label and drifting off the gap on every print.
+    cropped = img.crop((0, 0, width, min(y, _BC_HEIGHT_DOTS)))
+    gf_cmd, gw, gh = image_to_zpl_gf(cropped)
+
+    header = f"^XA\n^MNY\n^PW{width}\n^LL{_BC_HEIGHT_DOTS}\n^CI28\n"
+    return header + f"^FO0,0{gf_cmd}^FS\n^XZ\n"
+
+
+def _build_product_zpl_fields(title: str, barcode: str, price: float | None = None) -> str:
+    """Fallback ZPL builder using native ^BCN (no Pillow required; bar width capped at ^BY's max of 10)."""
+    name, title_h = _fit_name_1line(title, _BC_TITLE_H)
+    title_h = max(1, round(title_h))
+    price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
+
+    zpl_lines = ["^XA", "^MNY", f"^PW{_BC_WIDTH_DOTS}", "^CI28"]
+
+    y = round(15 * _BC_SCALE)
+    zpl_lines.append(f"^FO{_BC_MARGIN},{y}^A0N,{title_h},{title_h}^FD{name}^FS")
+    y += _BC_PITCH
+
+    price_y   = y + round(4 * _BC_SCALE)
+    barcode_y = price_y + round(34 * _BC_SCALE)
+
+    # Fixed physical label height (^LL), not content-dependent — keeps the
+    # printer in registration with the die-cut gaps (see _build_product_zpl_image).
+    zpl_lines.append(f"^LL{_BC_HEIGHT_DOTS}")
+    zpl_lines.append(f"^FO{_BC_MARGIN},{price_y}^A0N,{_BC_PRICE_H},{_BC_PRICE_H}^FD{price_line}^FS")
+    zpl_lines.append(f"^BY{_BC_MODULE},2,{_BC_BAR_HEIGHT}")
+    zpl_lines.append(f"^FO{_BC_MARGIN},{barcode_y}^BCN,{_BC_BAR_HEIGHT},Y,N,N^FD{barcode}^FS")
+    zpl_lines.append("^XZ")
+    return "\n".join(zpl_lines) + "\n"
+
+
 # ── Label printing dispatch ───────────────────────────────────────────────────
 
 def print_barcode_label(title: str, barcode: str,
@@ -188,41 +321,11 @@ def print_barcode_label(title: str, barcode: str,
     """Print a barcode label via config.BARCODE_MODE ('zebra', 'pdf', 'none')."""
     mode = config.BARCODE_MODE
     if mode == "zebra":
-        from services.zebra_service import build_product_zpl, print_label_usb
+        from services.zebra_service import print_label_usb
         zpl = build_product_zpl(title, barcode, price)
         print_label_usb(zpl)
     elif mode == "pdf":
         _print_barcode_pdf(title, barcode, price)
-
-
-def _wrap_pdf_name(title: str, font: str, size: float, max_w: float) -> list[str]:
-    """Word-wrap title into at most 2 lines fitting max_w pixels."""
-    from reportlab.pdfbase.pdfmetrics import stringWidth as sw
-    upper = title.upper().strip()
-    if sw(upper, font, size) <= max_w:
-        return [upper]
-    words = upper.split()
-    line1: list[str] = []
-    for word in words:
-        if sw(" ".join(line1 + [word]), font, size) <= max_w:
-            line1.append(word)
-        else:
-            break
-    l1 = " ".join(line1)
-    l2 = " ".join(words[len(line1):])
-    if not l1:
-        for i in range(len(upper) - 1, 0, -1):
-            if sw(upper[:i] + "...", font, size) <= max_w:
-                return [upper[:i] + "..."]
-        return ["..."]
-    if not l2:
-        return [l1]
-    if sw(l2, font, size) <= max_w:
-        return [l1, l2]
-    for i in range(len(l2) - 1, 0, -1):
-        if sw(l2[:i] + "...", font, size) <= max_w:
-            return [l1, l2[:i] + "..."]
-    return [l1, "..."]
 
 
 def _print_barcode_pdf(title: str, barcode: str, price: float | None) -> None:
@@ -232,28 +335,21 @@ def _print_barcode_pdf(title: str, barcode: str, price: float | None) -> None:
     try:
         from reportlab.lib.units import inch
         from reportlab.pdfgen import canvas as rl_canvas
-        from services.zebra_service import (_BC_MARGIN_IN, _BC_TITLE_SIZE_IN,
-                                            _BC_PRICE_SIZE_IN, _BC_BAR_HEIGHT_IN)
 
-        name_font  = "Helvetica-Bold"
-        name_size  = round(_BC_TITLE_SIZE_IN * 72, 1)
+        name_font  = "Helvetica"   # matches price's regular style (see _BC_TITLE_SIZE_IN above)
+        name, name_size = _fit_name_1line(title, round(_BC_TITLE_SIZE_IN * 72, 1))
         line_h     = 0.18 * inch
         margin     = _BC_MARGIN_IN * inch
-        page_w     = config.RECEIPT_WIDTH_IN * inch
-        max_name_w = page_w - margin * 2
+        page_w     = config.BARCODE_WIDTH_IN * inch
 
-        name_lines = _wrap_pdf_name(title, name_font, name_size, max_name_w)
-        n_name     = len(name_lines)
-
-        # Height: name lines + price + barcode + margins
-        page_h = (n_name * line_h) + 0.22 * inch + 0.85 * inch + 0.12 * inch
+        # Height: name line + price + barcode + margins
+        page_h = line_h + 0.22 * inch + 0.85 * inch + 0.12 * inch
         c = rl_canvas.Canvas(pdf_path, pagesize=(page_w, page_h))
 
         y = page_h - 0.16 * inch
         c.setFont(name_font, name_size)
-        for nl in name_lines:
-            c.drawString(margin, y, nl)
-            y -= line_h
+        c.drawString(margin, y, name)
+        y -= line_h
 
         if price is not None:
             y -= 0.02 * inch

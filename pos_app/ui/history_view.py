@@ -286,6 +286,45 @@ class HistoryView(tk.Frame):
 
         self._show_detail()
 
+    def _choose_export_format(self, title: str) -> str | None:
+        """Modal dialog: choose the report file format. Returns 'pdf', 'xlsx', or None if cancelled."""
+        result = [None]
+        dlg = tk.Toplevel(self, bg=BG)
+        dlg.title(title)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="Choose a file format:", bg=BG,
+                 font=("Helvetica", 11)).pack(padx=24, pady=(20, 10))
+
+        fmt_var = tk.StringVar(value="pdf")
+        opt_frame = tk.Frame(dlg, bg=BG)
+        opt_frame.pack(anchor="w", padx=24, pady=(0, 16))
+        for label, val in (("PDF", "pdf"), ("Excel (.xlsx)", "xlsx")):
+            tk.Radiobutton(opt_frame, text=label, variable=fmt_var, value=val,
+                           bg=BG, activebackground=BG, font=("Helvetica", 10),
+                           selectcolor=BG).pack(anchor="w", pady=2)
+
+        btn_row = tk.Frame(dlg, bg=BG)
+        btn_row.pack(padx=24, pady=(0, 20))
+
+        def _confirm():
+            result[0] = fmt_var.get()
+            dlg.destroy()
+
+        def _cancel():
+            dlg.destroy()
+
+        styled_button(btn_row, "Cancel", _cancel).pack(side="left", padx=(0, 8))
+        styled_button(btn_row, "OK", _confirm, bg=BTN_OK).pack(side="left")
+
+        dlg.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width()  - dlg.winfo_width())  // 2
+        y = self.winfo_rooty() + (self.winfo_height() - dlg.winfo_height()) // 2
+        dlg.geometry(f"+{x}+{y}")
+        self.wait_window(dlg)
+        return result[0]
+
     def _print_report(self):
         date_from = self._to_iso(self._from_var.get())
         date_to   = self._to_iso(self._to_var.get())
@@ -293,8 +332,14 @@ class HistoryView(tk.Frame):
         if not orders:
             messagebox.showinfo("Report", "No orders found for the selected period.")
             return
+        fmt = self._choose_export_format("Print Report")
+        if fmt is None:
+            return
         try:
-            receipt_service.build_sales_report_pdf(orders, date_from, date_to)
+            if fmt == "xlsx":
+                receipt_service.build_sales_report_xlsx(orders, date_from, date_to)
+            else:
+                receipt_service.build_sales_report_pdf(orders, date_from, date_to)
         except Exception as exc:
             messagebox.showwarning("Report Error", str(exc))
 
@@ -305,8 +350,14 @@ class HistoryView(tk.Frame):
         if not orders:
             messagebox.showinfo("Report", "No orders found for the selected period.")
             return
+        fmt = self._choose_export_format("Detailed Report")
+        if fmt is None:
+            return
         try:
-            receipt_service.build_detailed_report_pdf(orders, date_from, date_to)
+            if fmt == "xlsx":
+                receipt_service.build_detailed_report_xlsx(orders, date_from, date_to)
+            else:
+                receipt_service.build_detailed_report_pdf(orders, date_from, date_to)
         except Exception as exc:
             messagebox.showwarning("Report Error", str(exc))
 
