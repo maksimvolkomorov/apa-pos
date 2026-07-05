@@ -29,7 +29,7 @@ a = Analysis(
     ],
     hiddenimports=[
         'barcode', 'barcode.writer',
-        'PIL', 'PIL.Image',
+        'PIL', 'PIL.Image', 'PIL.ImageDraw', 'PIL.ImageFont',
         'reportlab', 'reportlab.pdfgen',
         'reportlab.lib.pagesizes', 'reportlab.platypus',
         'win32print', 'win32api', 'win32con', 'pywintypes', 'win32timezone',

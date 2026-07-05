@@ -9,6 +9,7 @@ Dispatch mode is driven by config.RECEIPT_MODE:
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 
 import config
@@ -95,6 +96,105 @@ def _fmt_dt(iso: str) -> str:
 # Name-wrap width in characters — sized to the printable width at a rough
 # 0.6x-em average character width, shared by ZPL and the plain-text receipt.
 _TXT_WIDTH = max(20, int((config.RECEIPT_WIDTH_IN - 2 * _MARGIN_IN) / (0.6 * _BODY_SIZE_IN)))
+
+
+# ── Shared receipt content ────────────────────────────────────────────────────
+# One instruction list describes what a receipt says; the PDF, ZPL-image, and
+# ZPL-fields renderers each just interpret it with their own drawing
+# primitives. A content change (new line, different conditional) only needs
+# to happen here — it then applies to every renderer automatically. Item-name
+# wrapping is renderer-specific (different font-metric engines: PIL vs
+# reportlab vs character-count), so ItemLine keeps the raw name/qty/price
+# and each renderer wraps it with its own method.
+
+@dataclass
+class Center:
+    text: str
+    size: str = "body"   # "title" | "addr" | "body" | "total"
+    bold: bool = False
+
+
+@dataclass
+class Pair:
+    """Left-aligned label + right-justified value on the same line."""
+    left: str
+    right: str
+    size: str = "body"
+    bold: bool = False
+
+
+@dataclass
+class ItemLine:
+    """A line item — name (wrapped per-renderer) plus a qty/price Pair row."""
+    name: str
+    qty: int
+    price: float
+
+
+@dataclass
+class Rule:
+    thick: bool = False
+
+
+@dataclass
+class Gap:
+    """Extra vertical breathing room (one _TOTAL_GAP)."""
+
+
+def _receipt_content(order: dict, items: list[dict]) -> list:
+    """Build the ordered content of a receipt, shared by every renderer."""
+    is_gift  = order.get("payment_method") == "gift"
+    sym      = config.CURRENCY_SYMBOL
+    tax_rate = 0.0 if is_gift else config.TAX_RATE
+    disc_pct = order.get("discount_pct") or 0.0
+    subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
+    disc_amt = round(subtotal * disc_pct / 100, 2)
+    taxable  = subtotal - disc_amt
+    tax      = round(taxable * tax_rate, 2)
+    total    = taxable + tax
+    dt       = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
+
+    content: list = [Center(config.STORE_NAME, size="title", bold=True)]
+    for addr_line in config.STORE_ADDRESS:
+        content.append(Center(addr_line, size="addr"))
+
+    if is_gift:
+        content.append(Center("** GIFT RECEIPT **", size="total", bold=True))
+        if order.get("customer_name"):
+            content.append(Center(f"For: {order['customer_name']}"))
+
+    content.append(Center(dt))
+    content.append(Center(f"Order #{order['id']}"))
+    if order.get("processed_by"):
+        content.append(Center(f"Served by: {order['processed_by']}"))
+    if not is_gift:
+        content.append(Center(f"Payment: {(order.get('payment_method') or 'cash').upper()}"))
+
+    content.append(Gap())
+    content.append(Rule(thick=True))
+    content.append(Gap())
+
+    for item in items:
+        content.append(ItemLine(item["product_name"], item["quantity"],
+                                 item["quantity"] * item["unit_price"]))
+
+    content.append(Rule())
+
+    content.append(Pair("  Subtotal", f"{sym}{subtotal:.2f}"))
+    if disc_pct:
+        content.append(Pair(f"  Discount ({disc_pct:.4g}%)", f"-{sym}{disc_amt:.2f}"))
+    if not is_gift:
+        content.append(Pair("  Sales Tax", f"{sym}{tax:.2f}"))
+
+    content.append(Gap())
+    content.append(Rule(thick=True))
+    content.append(Gap())
+    content.append(Pair("  TOTAL", f"{sym}{total:.2f}", size="total", bold=True))
+    content.append(Rule())
+    content.append(Gap())
+    content.append(Center("Thank you!"))
+
+    return content
 
 
 def _fit_name(name: str, max_chars: int) -> list[str]:
@@ -185,112 +285,171 @@ def build_receipt_zpl(order: dict, items: list[dict]) -> str:
     """
     Build a ZPL receipt for the Zebra printer on 4" continuous paper.
 
-    Gift orders (payment_method == "gift") show a "** GIFT RECEIPT **"
-    banner and skip the Payment/Sales Tax lines, but are otherwise
-    identical — prices, Subtotal, Discount, and TOTAL are always shown.
+    Renders the receipt as a bitmap (Pillow) and embeds it via ^GF —
+    this uses real font metrics for alignment instead of ^A0N's
+    proportional-font quirks. Falls back to plain ZPL field commands
+    if Pillow isn't installed.
     """
-    is_gift  = order.get("payment_method") == "gift"
-    sym      = config.CURRENCY_SYMBOL
-    tax_rate = 0.0 if is_gift else config.TAX_RATE
-    disc_pct = order.get("discount_pct") or 0.0
-    subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
-    disc_amt = round(subtotal * disc_pct / 100, 2)
-    taxable  = subtotal - disc_amt
-    tax      = round(taxable * tax_rate, 2)
-    total    = taxable + tax
+    try:
+        return _build_receipt_zpl_image(order, items)
+    except ImportError:
+        return _build_receipt_zpl_fields(order, items)
 
-    lines: list[str] = []
 
-    def y_next(y: int, extra: int = 0) -> int:
-        return y + _LINE_H + extra
+def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
+    """Render the receipt as a bitmap and embed it via ZPL's ^GF. Raises ImportError if Pillow is missing."""
+    from PIL import Image, ImageDraw, ImageFont
+    from services.zebra_service import find_ttf_fonts, image_to_zpl_gf
 
-    def text(y: int, content: str, font_h: int = _FONT_H) -> tuple[str, int]:
-        cmd = (f"^FO{_MARGIN_X},{y}"
-               f"^A0N,{font_h},{font_h}"
-               f"^FD{content}^FS")
-        return cmd, y_next(y)
+    content = _receipt_content(order, items)
+    sym     = config.CURRENCY_SYMBOL
 
-    def separator(y: int, thick: int = 1) -> tuple[str, int]:
-        cmd = f"^FO{_MARGIN_X},{y + _SEP_Y_PAD}^GB{_ZPL_WIDTH_DOTS - _MARGIN_X * 2},{thick},{thick}^FS"
-        return cmd, y + thick + _SEP_Y_PAD * 2
+    reg_path, bold_path = find_ttf_fonts()
+
+    def make_font(size: int, bold: bool = False):
+        path = (bold_path or reg_path) if bold else reg_path
+        return ImageFont.truetype(path, size) if path else ImageFont.load_default()
+
+    size_px    = {"title": _TITLE_H, "addr": _ADDR_H, "body": _FONT_H, "total": _TOTAL_H}
+    font_cache: dict[tuple[str, bool], object] = {}
+
+    def get_font(size_key: str, bold: bool):
+        key = (size_key, bold)
+        if key not in font_cache:
+            font_cache[key] = make_font(size_px[size_key], bold=bold)
+        return font_cache[key]
+
+    width      = _ZPL_WIDTH_DOTS
+    max_name_w = width - _MARGIN_X * 2
+    img  = Image.new("L", (width, 4000), 255)   # generous height; cropped to content below
+    draw = ImageDraw.Draw(img)
+
+    def fit_name(name: str, fnt, max_w: int) -> list[str]:
+        """Pixel-accurate 2-line fit, mirroring _fit_name_px but for a PIL font."""
+        upper = name.upper().strip()
+        if not upper:
+            return [""]
+        if draw.textlength(upper, font=fnt) <= max_w:
+            return [upper]
+        words = upper.split()
+        line1: list[str] = []
+        for word in words:
+            if draw.textlength(" ".join(line1 + [word]), font=fnt) <= max_w:
+                line1.append(word)
+            else:
+                break
+        l1 = " ".join(line1)
+        l2 = " ".join(words[len(line1):])
+        if not l1:
+            for i in range(len(upper) - 1, 0, -1):
+                if draw.textlength(upper[:i] + "...", font=fnt) <= max_w:
+                    return [upper[:i] + "..."]
+            return ["..."]
+        if not l2:
+            return [l1]
+        if draw.textlength(l2, font=fnt) <= max_w:
+            return [l1, l2]
+        for i in range(len(l2) - 1, 0, -1):
+            if draw.textlength(l2[:i] + "...", font=fnt) <= max_w:
+                return [l1, l2[:i] + "..."]
+        return [l1, "..."]
 
     y = 20
 
-    # Store name
-    cmd, y = text(y, config.STORE_NAME, font_h=_TITLE_H)
-    lines.append(cmd)
-
-    # Address lines
-    for addr_line in config.STORE_ADDRESS:
-        cmd, y = text(y, addr_line, font_h=_ADDR_H)
-        lines.append(cmd)
-
-    if is_gift:
-        cmd, y = text(y, "** GIFT RECEIPT **", font_h=_TOTAL_H)
-        lines.append(cmd)
-        if order.get("customer_name"):
-            cmd, y = text(y, f"For: {order['customer_name']}")
-            lines.append(cmd)
-
-    # Date + order ID + operator
-    dt = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
-    cmd, y = text(y, dt)
-    lines.append(cmd)
-    cmd, y = text(y, f"Order #{order['id']}")
-    lines.append(cmd)
-    if order.get("processed_by"):
-        cmd, y = text(y, f"Served by: {order['processed_by']}")
-        lines.append(cmd)
-    if not is_gift:
-        cmd, y = text(y, f"Payment: {(order.get('payment_method') or 'cash').upper()}")
-        lines.append(cmd)
-
-    # Separator
-    cmd, y = separator(y, thick=2)
-    lines.append(cmd)
-
-    # Line items — name (up to 2 lines) then indented qty + price line
-    for item in items:
-        name_lines = _fit_name(item["product_name"], _TXT_WIDTH)
-        qty   = item["quantity"]
-        price = item["quantity"] * item["unit_price"]
-        for nl in name_lines:
-            cmd, y = text(y, nl)
-            lines.append(cmd)
-        cmd, y = text(y, f"  x{qty:<3}  {sym}{price:.2f}")
-        lines.append(cmd)
-
-    # Thin separator
-    cmd, y = separator(y)
-    lines.append(cmd)
-
-    # Totals
-    cmd, y = text(y, _total_line("Subtotal", f"{sym}{subtotal:.2f}", _TXT_WIDTH))
-    lines.append(cmd)
-    if disc_pct:
-        label = f"Discount ({disc_pct:.4g}%)"
-        cmd, y = text(y, _total_line(label, f"-{sym}{disc_amt:.2f}", _TXT_WIDTH))
-        lines.append(cmd)
-    if not is_gift:
-        cmd, y = text(y, _total_line("Sales Tax", f"{sym}{tax:.2f}", _TXT_WIDTH))
-        lines.append(cmd)
-
-    # Bold separator + TOTAL
-    cmd, y = separator(y, thick=2)
-    lines.append(cmd)
-    y += _TOTAL_GAP
-    cmd, y = text(y, _total_line("TOTAL", f"{sym}{total:.2f}", _TXT_WIDTH), font_h=_TOTAL_H)
-    lines.append(cmd)
-
-    # Footer
-    cmd, y = separator(y)
-    lines.append(cmd)
-    y += _TOTAL_GAP
-    cmd, y = text(y, "Thank you!", font_h=_FONT_H)
-    lines.append(cmd)
+    for instr in content:
+        if isinstance(instr, Center):
+            fnt = get_font(instr.size, instr.bold)
+            w = draw.textlength(instr.text, font=fnt)
+            draw.text(((width - w) / 2, y), instr.text, font=fnt, fill=0)
+            y += _LINE_H
+        elif isinstance(instr, Pair):
+            fnt = get_font(instr.size, instr.bold)
+            draw.text((_MARGIN_X, y), instr.left, font=fnt, fill=0)
+            rw = draw.textlength(instr.right, font=fnt)
+            draw.text((width - _MARGIN_X - rw, y), instr.right, font=fnt, fill=0)
+            y += _LINE_H
+        elif isinstance(instr, Rule):
+            thick = 2 if instr.thick else 1
+            top = y + _SEP_Y_PAD
+            draw.rectangle([_MARGIN_X, top, width - _MARGIN_X, top + thick - 1], fill=0)
+            y = y + thick + _SEP_Y_PAD * 2
+        elif isinstance(instr, Gap):
+            y += _TOTAL_GAP
+        elif isinstance(instr, ItemLine):
+            fnt = get_font("body", False)
+            for nl in fit_name(instr.name, fnt, max_name_w):
+                draw.text((_MARGIN_X, y), nl, font=fnt, fill=0)
+                y += _LINE_H
+            right = f"{sym}{instr.price:.2f}"
+            draw.text((_MARGIN_X, y), f"  x{instr.qty}", font=fnt, fill=0)
+            rw = draw.textlength(right, font=fnt)
+            draw.text((width - _MARGIN_X - rw, y), right, font=fnt, fill=0)
+            y += _LINE_H
 
     label_height = y + 20   # bottom margin
+    cropped = img.crop((0, 0, width, label_height))
+    gf_cmd, gw, gh = image_to_zpl_gf(cropped)
 
+    header = (
+        "^XA\n"
+        "^MNC\n"
+        f"^PW{width}\n"
+        f"^LL{gh}\n"
+        "^CI28\n"
+    )
+    return header + f"^FO0,0{gf_cmd}^FS\n" + "^XZ\n"
+
+
+def _build_receipt_zpl_fields(order: dict, items: list[dict]) -> str:
+    """Fallback ZPL builder using plain field commands (no Pillow required)."""
+    content = _receipt_content(order, items)
+    sym     = config.CURRENCY_SYMBOL
+    size_h  = {"title": _TITLE_H, "addr": _ADDR_H, "body": _FONT_H, "total": _TOTAL_H}
+    block_w = _ZPL_WIDTH_DOTS - _MARGIN_X * 2
+
+    lines: list[str] = []
+    y = 20
+
+    def emit_center(text: str, font_h: int) -> None:
+        nonlocal y
+        lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FB{block_w},1,0,C^FD{text}^FS")
+        y += _LINE_H
+
+    def emit_left(text: str, font_h: int) -> None:
+        nonlocal y
+        lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FD{text}^FS")
+        y += _LINE_H
+
+    def emit_pair(left: str, right: str, font_h: int) -> None:
+        """^A0N is proportional, not monospace — ^FB's right-justify (not
+        manual space-padding) is what actually lands the value at the
+        right margin."""
+        nonlocal y
+        lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FD{left}^FS")
+        lines.append(f"^FO{_MARGIN_X},{y}^A0N,{font_h},{font_h}^FB{block_w},1,0,R^FD{right}^FS")
+        y += _LINE_H
+
+    def emit_rule(thick: bool) -> None:
+        nonlocal y
+        t = 2 if thick else 1
+        lines.append(f"^FO{_MARGIN_X},{y + _SEP_Y_PAD}^GB{block_w},{t},{t}^FS")
+        y += t + _SEP_Y_PAD * 2
+
+    for instr in content:
+        if isinstance(instr, Center):
+            emit_center(instr.text, size_h[instr.size])
+        elif isinstance(instr, Pair):
+            emit_pair(instr.left, instr.right, size_h[instr.size])
+        elif isinstance(instr, Rule):
+            emit_rule(instr.thick)
+        elif isinstance(instr, Gap):
+            y += _TOTAL_GAP
+        elif isinstance(instr, ItemLine):
+            for nl in _fit_name(instr.name, _TXT_WIDTH):
+                emit_left(nl, _FONT_H)
+            emit_pair(f"  x{instr.qty}", f"{sym}{instr.price:.2f}", _FONT_H)
+
+    label_height = y + 20   # bottom margin
     header = (
         "^XA\n"
         "^MNC\n"                    # continuous media (no gaps) for thermal tape
@@ -393,101 +552,75 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
     from reportlab.pdfgen import canvas as rl_canvas
     _register_fonts()
 
-    is_gift  = order.get("payment_method") == "gift"
-    sym      = config.CURRENCY_SYMBOL
-    tax_rate = 0.0 if is_gift else config.TAX_RATE
-    disc_pct = order.get("discount_pct") or 0.0
-    subtotal = sum(i["quantity"] * i["unit_price"] for i in items)
-    disc_amt = round(subtotal * disc_pct / 100, 2)
-    taxable  = subtotal - disc_amt
-    tax      = round(taxable * tax_rate, 2)
-    total    = taxable + tax
-    dt       = _fmt_dt(order.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")))
+    content = _receipt_content(order, items)
+    sym     = config.CURRENCY_SYMBOL
 
     # Page matches the physical receipt paper width (same constants as ZPL).
     title_sz = round(_TITLE_SIZE_IN * 72, 1)
     addr_sz  = round(_ADDR_SIZE_IN  * 72, 1)
     body_sz  = round(_BODY_SIZE_IN  * 72, 1)
     total_sz = round(_TOTAL_SIZE_IN * 72, 1)
-    page_w   = config.RECEIPT_WIDTH_IN * inch
-    line_h   = _LINE_PITCH_IN * 72
-    margin   = _MARGIN_IN * inch
-    n_lines  = (9 + len(items) * 3 + (1 if disc_pct else 0)
-                + (1 if order.get("processed_by") else 0)
-                + (1 if is_gift else 0)
-                + (1 if is_gift and order.get("customer_name") else 0))
-    # +2 gaps: one before TOTAL, one before "Thank you!"
-    page_h   = n_lines * line_h + 2 * (_TOTAL_GAP_IN * 72) + 60
+    size_map = {"title": title_sz, "addr": addr_sz, "body": body_sz, "total": total_sz}
 
-    c   = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
-    y   = page_h - 20
+    page_w     = config.RECEIPT_WIDTH_IN * inch
+    line_h     = _LINE_PITCH_IN * 72
+    margin     = _MARGIN_IN * inch
+    max_name_w = page_w - margin * 2
 
-    def draw(txt: str, size: float = body_sz, bold: bool = False, centre: bool = False):
+    # Pass 1: measure exact content height (item-name wrap included) instead
+    # of guessing via a hand-tuned line-count formula — that's what let the
+    # "Thank you!" line silently fall off the bottom of the page earlier.
+    content_h = 0.0
+    for instr in content:
+        if isinstance(instr, ItemLine):
+            name_lines = _fit_name_px(instr.name, _FONT_REGULAR, body_sz, max_name_w)
+            content_h += line_h * (len(name_lines) + 1)
+        elif isinstance(instr, Rule):
+            content_h += 4
+        elif isinstance(instr, Gap):
+            content_h += _TOTAL_GAP_IN * 72
+        else:
+            content_h += line_h
+    page_h = content_h + 40   # 20pt top margin + 20pt bottom margin
+
+    c = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
+    y = page_h - 20
+
+    def draw_center(text: str, size: float, bold: bool = False):
         nonlocal y
         c.setFont(_FONT_BOLD if bold else _FONT_REGULAR, size)
-        x = margin if not centre else page_w / 2
-        if centre:
-            c.drawCentredString(x, y, txt)
-        else:
-            c.drawString(x, y, txt)
+        c.drawCentredString(page_w / 2, y, text)
         y -= line_h
 
-    def hline(thick: float = 0.5):
+    def draw_pair(left: str, right: str, size: float, bold: bool = False):
         nonlocal y
-        c.setLineWidth(thick)
+        c.setFont(_FONT_BOLD if bold else _FONT_REGULAR, size)
+        c.drawString(margin, y, left)
+        c.drawRightString(page_w - margin, y, right)
+        y -= line_h
+
+    def draw_rule(thick: bool):
+        nonlocal y
+        c.setLineWidth(1.5 if thick else 0.5)
         c.line(margin, y + line_h * 0.4, page_w - margin, y + line_h * 0.4)
         y -= 4
 
-    draw(config.STORE_NAME,        size=title_sz, bold=True, centre=True)
-    for addr_line in config.STORE_ADDRESS:
-        draw(addr_line,            size=addr_sz,             centre=True)
-    if is_gift:
-        draw("** GIFT RECEIPT **", size=total_sz, bold=True, centre=True)
-        if order.get("customer_name"):
-            draw(f"For: {order['customer_name']}", size=body_sz, centre=True)
-    draw(dt,                       size=body_sz,             centre=True)
-    draw(f"Order #{order['id']}", size=body_sz,              centre=True)
-    if order.get("processed_by"):
-        draw(f"Served by: {order['processed_by']}", size=body_sz, centre=True)
-    if not is_gift:
-        draw(f"Payment: {(order.get('payment_method') or 'cash').upper()}", size=body_sz, centre=True)
-    hline(thick=1.5)
-
-    for item in items:
-        max_name_w = page_w - margin * 2
-        name_lines = _fit_name_px(item["product_name"], _FONT_REGULAR, body_sz, max_name_w)
-        qty   = item["quantity"]
-        price = item["quantity"] * item["unit_price"]
-        c.setFont(_FONT_REGULAR, body_sz)
-        for nl in name_lines:
-            c.drawString(margin, y, nl)
-            y -= line_h
-        c.drawString(margin, y, f"  x{qty}")
-        c.drawRightString(page_w - margin, y, f"{sym}{price:.2f}")
-        y -= line_h
-
-    hline()
-    c.setFont(_FONT_REGULAR, body_sz)
-    c.drawString(margin, y, "Subtotal")
-    c.drawRightString(page_w - margin, y, f"{sym}{subtotal:.2f}")
-    y -= line_h
-    if disc_pct:
-        c.drawString(margin, y, f"Discount ({disc_pct:.4g}%)")
-        c.drawRightString(page_w - margin, y, f"-{sym}{disc_amt:.2f}")
-        y -= line_h
-    if not is_gift:
-        c.drawString(margin, y, "Sales Tax")
-        c.drawRightString(page_w - margin, y, f"{sym}{tax:.2f}")
-        y -= line_h
-    hline(thick=1.5)
-    y -= _TOTAL_GAP_IN * 72
-    c.setFont(_FONT_BOLD, total_sz)
-    c.drawString(margin, y, "TOTAL")
-    c.drawRightString(page_w - margin, y, f"{sym}{total:.2f}")
-    y -= line_h
-    hline()
-    y -= _TOTAL_GAP_IN * 72
-    draw("Thank you!", size=body_sz, centre=True)
+    # Pass 2: draw.
+    for instr in content:
+        if isinstance(instr, Center):
+            draw_center(instr.text, size_map[instr.size], instr.bold)
+        elif isinstance(instr, Pair):
+            draw_pair(instr.left, instr.right, size_map[instr.size], instr.bold)
+        elif isinstance(instr, Rule):
+            draw_rule(instr.thick)
+        elif isinstance(instr, Gap):
+            y -= _TOTAL_GAP_IN * 72
+        elif isinstance(instr, ItemLine):
+            c.setFont(_FONT_REGULAR, body_sz)
+            for nl in _fit_name_px(instr.name, _FONT_REGULAR, body_sz, max_name_w):
+                c.drawString(margin, y, nl)
+                y -= line_h
+            draw_pair(f"  x{instr.qty}", f"{sym}{instr.price:.2f}", body_sz)
 
     c.save()
 

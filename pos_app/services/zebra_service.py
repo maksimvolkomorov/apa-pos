@@ -1,11 +1,48 @@
 """Zebra GX420D service — ZPL builder and USB sender.
 
-All functions are pure Python; no external dependencies required.
+Labels/receipts are rendered as bitmaps (Pillow) and embedded via ZPL's
+^GF graphic field when Pillow is available — this sidesteps ^A0N's
+proportional-font alignment quirks and ^BY's 10-dot module-width cap,
+using real font metrics and pixel-exact bar widths instead. Falls back
+to composing plain ZPL field commands when Pillow isn't installed.
 """
 import os
 import sys
 
 import config
+
+
+def find_ttf_fonts() -> tuple[str | None, str | None]:
+    """Locate a Unicode-capable (regular, bold) TTF pair for PIL rendering."""
+    candidates = [
+        ("C:/Windows/Fonts/arial.ttf",   "C:/Windows/Fonts/arialbd.ttf"),
+        ("C:/Windows/Fonts/calibri.ttf", "C:/Windows/Fonts/calibrib.ttf"),
+        ("/Library/Fonts/Arial.ttf",     "/Library/Fonts/Arial Bold.ttf"),
+    ]
+    for reg, bold in candidates:
+        if os.path.exists(reg) and os.path.exists(bold):
+            return reg, bold
+    return None, None
+
+
+def image_to_zpl_gf(img) -> tuple[str, int, int]:
+    """
+    Convert a Pillow image to a ZPL ^GFA graphic-field command.
+
+    Returns (gf_command, width_px, height_px). ZPL's bit convention is
+    1 = black/print, 0 = white — the inverse of PIL's packed mode "1"
+    (1 = white), so the packed bytes are bitwise-inverted before encoding.
+    """
+    from PIL import Image
+    bw = img.convert("L").convert("1", dither=Image.NONE)
+    w, h = bw.size
+    bytes_per_row = (w + 7) // 8
+    packed = bw.tobytes()
+    inverted = bytes(b ^ 0xFF for b in packed)
+    hex_data = inverted.hex().upper()
+    total_bytes = len(inverted)
+    cmd = f"^GFA,{total_bytes},{total_bytes},{bytes_per_row},{hex_data}"
+    return cmd, w, h
 
 
 def _wrap_name(title: str, max_chars: int) -> list[str]:
@@ -53,13 +90,78 @@ _BC_WIDTH_DOTS = round(config.RECEIPT_WIDTH_IN * config.ZEBRA_DPI)
 
 def build_product_zpl(title: str, barcode: str, price: float | None = None) -> str:
     """
-    Build a ZPL label for the Zebra printer on 4" continuous paper.
+    Build a ZPL barcode label for the Zebra printer on 4" continuous paper.
 
-    Layout (dynamic height):
-      - Product title — up to 2 lines, top
-      - Price         — below title (when provided)
-      - Code128 bars  — middle, with human-readable text
+    Renders the label as a bitmap (Pillow) and embeds it via ^GF — draws
+    the Code128 bars directly at whatever width we choose, with no ^BY
+    10-dot firmware cap. Falls back to plain ZPL field commands (native
+    ^BCN barcode, capped bar width) if Pillow isn't installed.
     """
+    try:
+        return _build_product_zpl_image(title, barcode, price)
+    except ImportError:
+        return _build_product_zpl_fields(title, barcode, price)
+
+
+def _build_product_zpl_image(title: str, barcode: str, price: float | None) -> str:
+    from PIL import Image, ImageDraw, ImageFont
+
+    name_lines = _wrap_name(title, 28)
+    price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
+
+    reg_path, bold_path = find_ttf_fonts()
+
+    def font(size: int, bold: bool = False):
+        path = (bold_path or reg_path) if bold else reg_path
+        return ImageFont.truetype(path, size) if path else ImageFont.load_default()
+
+    f_title = font(_BC_TITLE_H, bold=True)
+    f_price = font(_BC_PRICE_H)
+    f_num   = font(round(_BC_PRICE_H * 0.85))
+
+    width = _BC_WIDTH_DOTS
+    img   = Image.new("L", (width, 2000), 255)   # generous height; cropped below
+    draw  = ImageDraw.Draw(img)
+
+    y = round(15 * _BC_SCALE)
+    for nl in name_lines:
+        draw.text((_BC_MARGIN, y), nl, font=f_title, fill=0)
+        y += _BC_PITCH
+
+    if price_line:
+        y += round(4 * _BC_SCALE)
+        draw.text((_BC_MARGIN, y), price_line, font=f_price, fill=0)
+    y += round(38 * _BC_SCALE)
+
+    # Code128 bars, drawn at an explicit target width — no firmware cap.
+    from services.barcode_service import _bar_units
+    bars       = _bar_units(barcode)
+    total_units = sum(u for _, u in bars)
+    max_bar_w  = 0.75 * (width - _BC_MARGIN * 2)
+    scale      = max_bar_w / total_units
+
+    cx = _BC_MARGIN
+    bar_top = y
+    for is_black, units in bars:
+        w = units * scale
+        if is_black:
+            draw.rectangle([cx, bar_top, cx + w, bar_top + _BC_BAR_HEIGHT], fill=0)
+        cx += w
+    y = bar_top + _BC_BAR_HEIGHT + round(6 * _BC_SCALE)
+
+    num_w = draw.textlength(barcode, font=f_num)
+    draw.text(((width - num_w) / 2, y), barcode, font=f_num, fill=0)
+    y += round(_BC_PRICE_H * 0.85) + round(15 * _BC_SCALE)
+
+    cropped = img.crop((0, 0, width, y))
+    gf_cmd, gw, gh = image_to_zpl_gf(cropped)
+
+    header = f"^XA\n^MNN\n^PW{width}\n^LL{gh}\n^CI28\n"
+    return header + f"^FO0,0{gf_cmd}^FS\n^XZ\n"
+
+
+def _build_product_zpl_fields(title: str, barcode: str, price: float | None = None) -> str:
+    """Fallback ZPL builder using native ^BCN (no Pillow required; bar width capped at ^BY's max of 10)."""
     name_lines = _wrap_name(title, 28)
     price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
 

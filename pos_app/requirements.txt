@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements.txt
 
 python-barcode[images]   # Code128 PNG generation (fallback built-in if absent)
-Pillow                   # required by python-barcode ImageWriter
+Pillow                   # renders ZPL receipts/labels as bitmaps (^GF); also used by python-barcode ImageWriter
 reportlab                # optional — PDF receipts (plain .txt used if absent)
 openpyxl                 # xlsx import/export
 pywin32; sys_platform == "win32"   # Zebra printing via Windows print spooler (win32print)
