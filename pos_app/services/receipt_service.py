@@ -73,6 +73,7 @@ _TOTAL_SIZE_IN = 0.148   # TOTAL emphasis line
 _LINE_PITCH_IN = 0.167   # line-to-line vertical pitch
 _SEP_PAD_IN    = 0.030   # padding around a separator rule
 _TOTAL_GAP_IN  = _LINE_PITCH_IN       # extra breathing room before the TOTAL block (one blank line)
+_TOP_GAP_IN    = 1.0                  # blank space at the very top of the receipt, in inches
 
 _ZPL_WIDTH_DOTS = round(config.RECEIPT_WIDTH_IN * config.ZEBRA_DPI)
 _MARGIN_X       = round(_MARGIN_IN     * config.ZEBRA_DPI)
@@ -83,6 +84,8 @@ _TITLE_H        = round(_TITLE_SIZE_IN * config.ZEBRA_DPI)
 _ADDR_H         = round(_ADDR_SIZE_IN  * config.ZEBRA_DPI)
 _TOTAL_H        = round(_TOTAL_SIZE_IN * config.ZEBRA_DPI)
 _TOTAL_GAP      = round(_TOTAL_GAP_IN  * config.ZEBRA_DPI)
+_TOP_GAP        = round(_TOP_GAP_IN    * config.ZEBRA_DPI)   # top gap in dots (ZPL)
+_TOP_GAP_PT     = _TOP_GAP_IN * 72                            # top gap in points (PDF)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -354,7 +357,7 @@ def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
                 return [l1, l2[:i] + "..."]
         return [l1, "..."]
 
-    y = 20
+    y = 20 + _TOP_GAP
 
     for instr in content:
         if isinstance(instr, Center):
@@ -408,7 +411,7 @@ def _build_receipt_zpl_fields(order: dict, items: list[dict]) -> str:
     block_w = _ZPL_WIDTH_DOTS - _MARGIN_X * 2
 
     lines: list[str] = []
-    y = 20
+    y = 20 + _TOP_GAP
 
     def emit_center(text: str, font_h: int) -> None:
         nonlocal y
@@ -581,10 +584,10 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
             content_h += _TOTAL_GAP_IN * 72
         else:
             content_h += line_h
-    page_h = content_h + 40   # 20pt top margin + 20pt bottom margin
+    page_h = content_h + 40 + _TOP_GAP_PT   # 20pt top margin + 20pt bottom margin + top gap
 
     c = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
-    y = page_h - 20
+    y = page_h - 20 - _TOP_GAP_PT
 
     def draw_center(text: str, size: float, bold: bool = False):
         nonlocal y
