@@ -202,14 +202,16 @@ _BC_BAR_HEIGHT = round(_BC_BAR_HEIGHT_IN * config.ZEBRA_DPI)
 _BC_WIDTH_DOTS  = round(config.BARCODE_WIDTH_IN  * config.ZEBRA_DPI)
 _BC_HEIGHT_DOTS = round(config.BARCODE_HEIGHT_IN * config.ZEBRA_DPI)
 
-_BC_TITLE_MAX_CHARS = 28   # chars that fit on one line at full title size
+def _fit_name_1line(title: str) -> str:
+    """
+    Single-line product name at a fixed font size — no shrinking.
+    Shared by the ZPL and PDF label builders.
 
-def _fit_name_1line(title: str, base_size: float) -> tuple[str, float]:
-    """Single-line product name; shrink font size proportionally if too long to fit. Shared by the ZPL and PDF label builders."""
-    upper = title.upper().strip()
-    if len(upper) <= _BC_TITLE_MAX_CHARS:
-        return upper, base_size
-    return upper, base_size * _BC_TITLE_MAX_CHARS / len(upper)
+    The title size is sized to fit 6 space-separated 4-letter words
+    (29 chars) on the label's printable width; names longer than that
+    overflow rather than shrink.
+    """
+    return title.upper().strip()
 
 
 def build_product_zpl(title: str, barcode: str, price: float | None = None) -> str:
@@ -231,8 +233,8 @@ def _build_product_zpl_image(title: str, barcode: str, price: float | None) -> s
     from PIL import Image, ImageDraw, ImageFont
     from services.zebra_service import find_ttf_fonts, image_to_zpl_gf
 
-    name, title_h = _fit_name_1line(title, _BC_TITLE_H)
-    title_h = max(1, round(title_h))
+    name = _fit_name_1line(title)
+    title_h = _BC_TITLE_H
     price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
 
     reg_path, bold_path = find_ttf_fonts()
@@ -291,8 +293,8 @@ def _build_product_zpl_image(title: str, barcode: str, price: float | None) -> s
 
 def _build_product_zpl_fields(title: str, barcode: str, price: float | None = None) -> str:
     """Fallback ZPL builder using native ^BCN (no Pillow required; bar width capped at ^BY's max of 10)."""
-    name, title_h = _fit_name_1line(title, _BC_TITLE_H)
-    title_h = max(1, round(title_h))
+    name = _fit_name_1line(title)
+    title_h = _BC_TITLE_H
     price_line = f"{config.CURRENCY_SYMBOL}{price:.2f}" if price is not None else ""
 
     zpl_lines = ["^XA", "^MNY", f"^PW{_BC_WIDTH_DOTS}", "^CI28"]
@@ -337,7 +339,8 @@ def _print_barcode_pdf(title: str, barcode: str, price: float | None) -> None:
         from reportlab.pdfgen import canvas as rl_canvas
 
         name_font  = "Helvetica"   # matches price's regular style (see _BC_TITLE_SIZE_IN above)
-        name, name_size = _fit_name_1line(title, round(_BC_TITLE_SIZE_IN * 72, 1))
+        name       = _fit_name_1line(title)
+        name_size  = round(_BC_TITLE_SIZE_IN * 72, 1)
         line_h     = 0.18 * inch
         margin     = _BC_MARGIN_IN * inch
         page_w     = config.BARCODE_WIDTH_IN * inch
