@@ -66,7 +66,11 @@ def create(items: list[dict], processed_by: str | None = None,
     """
     Create an order and atomically decrement stock.
 
-    items: [{"product_id": int, "quantity": int, "unit_price": float}, ...]
+    items: [{"product_id": int | None, "quantity": int, "unit_price": float,
+             "product_name": str}, ...]
+
+    A "free sale" / manual item has product_id=None: it skips stock
+    validation and decrement, and uses the supplied product_name as-is.
 
     Returns the new order dict.
     Raises ValueError if any item has insufficient stock.
@@ -74,9 +78,11 @@ def create(items: list[dict], processed_by: str | None = None,
     conn = get_connection()
     cur = conn.cursor()
 
-    # Pre-flight: validate stock and snapshot product names
+    # Pre-flight: validate stock and snapshot product names (real products only)
     product_names: dict[int, str] = {}
     for item in items:
+        if item["product_id"] is None:
+            continue
         row = cur.execute(
             "SELECT stock, title FROM products WHERE id = ?", (item["product_id"],)
         ).fetchone()
@@ -107,21 +113,18 @@ def create(items: list[dict], processed_by: str | None = None,
         )
         order_id = cur.lastrowid
         for item in items:
+            pid = item["product_id"]
+            name = product_names[pid] if pid is not None else item["product_name"]
             cur.execute(
                 "INSERT INTO order_items"
                 " (order_id, product_id, product_name, quantity, unit_price)"
                 " VALUES (?, ?, ?, ?, ?)",
-                (
-                    order_id,
-                    item["product_id"],
-                    product_names[item["product_id"]],
-                    item["quantity"],
-                    item["unit_price"],
-                ),
+                (order_id, pid, name, item["quantity"], item["unit_price"]),
             )
-            cur.execute(
-                "UPDATE products SET stock = stock - ? WHERE id = ?",
-                (item["quantity"], item["product_id"]),
-            )
+            if pid is not None:
+                cur.execute(
+                    "UPDATE products SET stock = stock - ? WHERE id = ?",
+                    (item["quantity"], pid),
+                )
 
     return get_by_id(order_id)

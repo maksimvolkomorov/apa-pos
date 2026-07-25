@@ -55,6 +55,9 @@ class POSView(tk.Frame):
         styled_button(top, "Add by Name",
                       self._add_by_name).pack(side="left", padx=4)
 
+        styled_button(top, "Free Sale",
+                      self._add_manual_item).pack(side="left", padx=(12, 4))
+
 
         # ── main split ────────────────────────────────────────────────────────
         split = tk.Frame(self, bg=BG)
@@ -248,6 +251,77 @@ class POSView(tk.Frame):
 
         self._order.append({"product": fresh, "qty": 1})
         self._refresh_tv()
+
+    def _add_manual_item(self):
+        """'Free sale' — operator types a name and price with no catalog product behind it."""
+        item = self._manual_item_dialog()
+        if item is None:
+            return
+        self._order.append({
+            "product": {"id": None, "title": item["name"], "price": item["price"]},
+            "qty": 1,
+        })
+        self._refresh_tv()
+
+    def _manual_item_dialog(self) -> dict | None:
+        """Prompts for a free-sale item name + price. Returns dict or None if cancelled."""
+        result = [None]
+
+        dlg = tk.Toplevel(self, bg=BG)
+        dlg.title("Free Sale Item")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        pad = {"padx": 24}
+
+        tk.Label(dlg, text="Item name:", bg=BG,
+                 font=("Helvetica", 10)).pack(anchor="w", pady=(20, 2), **pad)
+        name_var = tk.StringVar(master=dlg)
+        name_entry = tk.Entry(dlg, textvariable=name_var, width=28,
+                               font=("Helvetica", 11), relief="solid", bd=1)
+        name_entry.pack(anchor="w", **pad)
+
+        sym = config.CURRENCY_SYMBOL
+        tk.Label(dlg, text=f"Price ({sym}):", bg=BG,
+                 font=("Helvetica", 10)).pack(anchor="w", pady=(12, 2), **pad)
+        price_var = tk.StringVar(master=dlg)
+        price_entry = tk.Entry(dlg, textvariable=price_var, width=12,
+                                font=("Helvetica", 11), relief="solid", bd=1)
+        price_entry.pack(anchor="w", **pad)
+
+        def _confirm():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning("Required", "Please enter an item name.", parent=dlg)
+                return
+            try:
+                price = round(float(price_var.get()), 2)
+            except ValueError:
+                messagebox.showwarning("Invalid Price", "Please enter a valid price.", parent=dlg)
+                return
+            if price < 0:
+                messagebox.showwarning("Invalid Price", "Price cannot be negative.", parent=dlg)
+                return
+            result[0] = {"name": name, "price": price}
+            dlg.destroy()
+
+        def _cancel():
+            dlg.destroy()
+
+        btn_row = tk.Frame(dlg, bg=BG)
+        btn_row.pack(pady=(20, 16), **pad)
+        styled_button(btn_row, "Cancel", _cancel).pack(side="left", padx=(0, 8))
+        styled_button(btn_row, "Add Item", _confirm, bg=BTN_OK).pack(side="left")
+
+        price_entry.bind("<Return>", lambda e: _confirm())
+        name_entry.focus_set()
+
+        dlg.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width()  - dlg.winfo_width())  // 2
+        y = self.winfo_rooty() + (self.winfo_height() - dlg.winfo_height()) // 2
+        dlg.geometry(f"+{x}+{y}")
+        self.wait_window(dlg)
+        return result[0]
 
     # ── Order rows ────────────────────────────────────────────────────────────
     def _refresh_tv(self):
@@ -481,9 +555,10 @@ class POSView(tk.Frame):
 
         items = [
             {
-                "product_id": item["product"]["id"],
-                "quantity":   item["qty"],
-                "unit_price": item["product"]["price"],
+                "product_id":   item["product"]["id"],
+                "product_name": item["product"]["title"],
+                "quantity":     item["qty"],
+                "unit_price":   item["product"]["price"],
             }
             for item in self._order
         ]

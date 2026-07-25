@@ -266,7 +266,7 @@ def _build_product_zpl_image(title: str, barcode: str, price: float | None) -> s
     max_bar_w  = 0.75 * (width - _BC_MARGIN * 2)
     scale      = max_bar_w / total_units
 
-    cx = _BC_MARGIN
+    cx = _BC_MARGIN + (width - _BC_MARGIN * 2 - max_bar_w) / 2
     bar_top = y
     for is_black, units in bars:
         w = units * scale
