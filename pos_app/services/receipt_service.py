@@ -74,6 +74,7 @@ _LINE_PITCH_IN = 0.167   # line-to-line vertical pitch
 _SEP_PAD_IN    = 0.030   # padding around a separator rule
 _TOTAL_GAP_IN  = _LINE_PITCH_IN       # extra breathing room before the TOTAL block (one blank line)
 _TOP_GAP_IN    = 1.0                  # blank space at the very top of the receipt, in inches
+_BOTTOM_GAP_IN = 0.5                  # blank space at the very bottom of the receipt, in inches
 
 # Line pitch as a multiple of the line's own font size (derived from body
 # text, where 0.167in pitch / 0.128in size ≈ 1.3x). Applying this ratio to
@@ -93,6 +94,8 @@ _TOTAL_H        = round(_TOTAL_SIZE_IN * config.ZEBRA_DPI)
 _TOTAL_GAP      = round(_TOTAL_GAP_IN  * config.ZEBRA_DPI)
 _TOP_GAP        = round(_TOP_GAP_IN    * config.ZEBRA_DPI)   # top gap in dots (ZPL)
 _TOP_GAP_PT     = _TOP_GAP_IN * 72                            # top gap in points (PDF)
+_BOTTOM_GAP     = round(_BOTTOM_GAP_IN * config.ZEBRA_DPI)    # bottom gap in dots (ZPL)
+_BOTTOM_GAP_PT  = _BOTTOM_GAP_IN * 72                         # bottom gap in points (PDF)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -397,7 +400,7 @@ def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
             draw.text((width - _MARGIN_X - rw, y), right, font=fnt, fill=0)
             y += _LINE_H
 
-    label_height = y + 20   # bottom margin
+    label_height = y + 20 + _BOTTOM_GAP   # bottom margin + bottom gap
     cropped = img.crop((0, 0, width, label_height))
     gf_cmd, gw, gh = image_to_zpl_gf(cropped)
 
@@ -460,7 +463,7 @@ def _build_receipt_zpl_fields(order: dict, items: list[dict]) -> str:
                 emit_left(nl, _FONT_H)
             emit_pair(f"  x{instr.qty}", f"{sym}{instr.price:.2f}", _FONT_H)
 
-    label_height = y + 20   # bottom margin
+    label_height = y + 20 + _BOTTOM_GAP   # bottom margin + bottom gap
     header = (
         "^XA\n"
         "^MNC\n"                    # continuous media (no gaps) for thermal tape
@@ -592,7 +595,7 @@ def _build_pdf_reportlab(order: dict, items: list[dict], path: str) -> None:
             content_h += _TOTAL_GAP_IN * 72
         else:
             content_h += size_map[instr.size] * _LINE_PITCH_RATIO
-    page_h = content_h + 40 + _TOP_GAP_PT   # 20pt top margin + 20pt bottom margin + top gap
+    page_h = content_h + 40 + _TOP_GAP_PT + _BOTTOM_GAP_PT   # 20pt top margin + 20pt bottom margin + top/bottom gaps
 
     c = rl_canvas.Canvas(path, pagesize=(page_w, page_h))
     y = page_h - 20 - _TOP_GAP_PT

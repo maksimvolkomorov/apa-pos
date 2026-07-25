@@ -55,7 +55,7 @@ class POSView(tk.Frame):
         styled_button(top, "Add by Name",
                       self._add_by_name).pack(side="left", padx=4)
 
-        styled_button(top, "Free Sale",
+        styled_button(top, "Open Item",
                       self._add_manual_item).pack(side="left", padx=(12, 4))
 
 
@@ -253,7 +253,7 @@ class POSView(tk.Frame):
         self._refresh_tv()
 
     def _add_manual_item(self):
-        """'Free sale' — operator types a name and price with no catalog product behind it."""
+        """'Open item' — operator types a name and price with no catalog product behind it."""
         item = self._manual_item_dialog()
         if item is None:
             return
@@ -264,11 +264,11 @@ class POSView(tk.Frame):
         self._refresh_tv()
 
     def _manual_item_dialog(self) -> dict | None:
-        """Prompts for a free-sale item name + price. Returns dict or None if cancelled."""
+        """Prompts for an open-item name + price. Returns dict or None if cancelled."""
         result = [None]
 
         dlg = tk.Toplevel(self, bg=BG)
-        dlg.title("Free Sale Item")
+        dlg.title("Open Item")
         dlg.resizable(False, False)
         dlg.grab_set()
 

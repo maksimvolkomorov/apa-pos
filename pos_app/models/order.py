@@ -69,7 +69,7 @@ def create(items: list[dict], processed_by: str | None = None,
     items: [{"product_id": int | None, "quantity": int, "unit_price": float,
              "product_name": str}, ...]
 
-    A "free sale" / manual item has product_id=None: it skips stock
+    An "open item" (manual item) has product_id=None: it skips stock
     validation and decrement, and uses the supplied product_name as-is.
 
     Returns the new order dict.
