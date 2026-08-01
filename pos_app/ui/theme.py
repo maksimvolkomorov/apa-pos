@@ -14,8 +14,9 @@ def fmt_dt(iso: str) -> str:
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 BG        = "#FFFFFF"
-NAV_BG    = "#FFFFFF"
+NAV_BG    = "#2E2E2E"
 NAV_ACT   = "#1ABC9C"
+TAB_ACT   = "#E8A33D"   # active nav tab / accent-orange buttons (Sales screen chrome)
 BTN_BG    = "#3498DB"
 BTN_FG    = "#1C1C1C"
 BTN_DNG   = "#E74C3C"
@@ -28,6 +29,7 @@ HEADER_BG = "#2980B9"
 HEADER_FG = "#FFFFFF"
 BORDER    = "#BDC3C7"
 FG_MUTED  = "#7F8C8D"
+FG_LIGHT  = "#F2F2F2"   # label text on dark chrome (nav bar / Sales screen)
 
 
 def _darken(hex_color: str) -> str:

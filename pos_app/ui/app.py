@@ -17,7 +17,7 @@ def _work_area() -> tuple[int, int, int, int]:
     return 0, 0, None, None
 
 import config
-from ui.theme import NAV_BG, NAV_ACT, BG, styled_button, show_pin_lock
+from ui.theme import NAV_BG, TAB_ACT, FG_LIGHT, BG, styled_button, show_pin_lock
 from ui.stock_view import StockView
 from ui.pos_view import POSView
 from ui.history_view import HistoryView
@@ -52,6 +52,7 @@ class App(tk.Tk):
         self.resizable(False, False)
         self.configure(bg=BG)
         self._set_icon()
+        self._apply_dark_titlebar()
         self._install_exception_handler()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._views: dict[type, tk.Frame] = {}
@@ -79,6 +80,31 @@ class App(tk.Tk):
             self._icon_img = tk.PhotoImage(file=logo_path)
             self.iconphoto(True, self._icon_img)
 
+    def _apply_dark_titlebar(self):
+        """Recolor the native Windows title bar (dark mode + Win11 caption/text color)."""
+        if sys.platform != "win32":
+            return
+
+        def bgr(hex_color: str) -> int:
+            hex_color = hex_color.lstrip("#")
+            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            return (b << 16) | (g << 8) | r
+
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        DWMWA_CAPTION_COLOR           = 35   # Windows 11 22H2+ only
+        DWMWA_TEXT_COLOR              = 36   # Windows 11 22H2+ only
+
+        hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+        dwm  = ctypes.windll.dwmapi
+
+        def set_attr(attr: int, value: int) -> None:
+            v = ctypes.c_int(value)
+            dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v))
+
+        set_attr(DWMWA_USE_IMMERSIVE_DARK_MODE, 1)
+        set_attr(DWMWA_CAPTION_COLOR, bgr(NAV_BG))     # no-op on Windows 10
+        set_attr(DWMWA_TEXT_COLOR, bgr(FG_LIGHT))      # no-op on Windows 10
+
     # ── Nav bar ───────────────────────────────────────────────────────────────
     def _build_nav(self):
         nav = tk.Frame(self, bg=NAV_BG, height=92)
@@ -86,28 +112,29 @@ class App(tk.Tk):
         nav.pack_propagate(False)
 
         tk.Label(nav, text="  APA@POS",
-                 bg=NAV_BG, fg="#1C1C1C",
+                 bg=NAV_BG, fg=FG_LIGHT,
                  font=("Helvetica", 13, "bold")).pack(side="left", padx=8)
 
         self._tab_btns: list[tk.Button] = []
         for i, (label, _) in enumerate(self.TABS):
             btn = tk.Button(nav, text=label,
-                            bg=NAV_BG, fg="#1C1C1C",
+                            bg=NAV_BG, fg=FG_LIGHT,
                             font=("Helvetica", 10), relief="flat",
                             padx=14, pady=10, cursor="hand2",
                             command=lambda idx=i: self.switch_tab(idx))
             btn.pack(side="left")
             self._tab_btns.append(btn)
 
-        # Store logo (right side)
+        # Store logo — centered in the nav bar, regardless of tab layout width
         logo_path = os.path.join(config._BUNDLED, "assets", "logo.png")
         if os.path.exists(logo_path):
             self._logo_img = tk.PhotoImage(file=logo_path)
-            tk.Label(nav, image=self._logo_img, bg=NAV_BG).pack(side="right", padx=16)
+            tk.Label(nav, image=self._logo_img, bg=NAV_BG
+                     ).place(relx=0.5, rely=0.5, anchor="center")
         else:
             logo = tk.Canvas(nav, bg=NAV_BG, width=64, height=64, highlightthickness=0)
-            logo.pack(side="right", padx=16)
-            logo.create_oval(2, 2, 62, 62, fill=NAV_ACT, outline="")
+            logo.place(relx=0.5, rely=0.5, anchor="center")
+            logo.create_oval(2, 2, 62, 62, fill=TAB_ACT, outline="")
             logo.create_text(32, 32, text="APA", fill="white",
                              font=("Helvetica", 16, "bold"))
 
@@ -130,7 +157,9 @@ class App(tk.Tk):
                 self._active.destroy()
         self.focus_set()
         for i, btn in enumerate(self._tab_btns):
-            btn.config(bg=NAV_ACT if i == idx else NAV_BG, fg="#1C1C1C")
+            active = i == idx
+            btn.config(bg=TAB_ACT if active else NAV_BG,
+                       fg="#1C1C1C" if active else FG_LIGHT)
         view = self._views[ViewClass]
         if getattr(view, "PIN_PROTECTED", False):
             pin_frame = tk.Frame(self._content, bg=BG)

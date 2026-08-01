@@ -8,14 +8,17 @@ from models import order as order_model
 from models import user as user_model
 from services import receipt_service
 from ui.theme import (
-    BG, TROW_ALT, BTN_DNG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
+    BG, NAV_BG, TAB_ACT, FG_LIGHT, TROW_ALT, BTN_DNG, BTN_OK, BORDER,
+    HEADER_BG, HEADER_FG, FG_MUTED,
     styled_button, AutocompleteEntry,
 )
+
+CHROME_BG = NAV_BG   # Sales screen's dark outer chrome, matches the nav bar
 
 
 class POSView(tk.Frame):
     def __init__(self, parent):
-        super().__init__(parent, bg=BG)
+        super().__init__(parent, bg=CHROME_BG)
         self._order: list[dict] = []    # [{"product": dict, "qty": int}]
         self._last_processed_by: str | None = user_model.get_last_used()
         self._build()
@@ -32,10 +35,10 @@ class POSView(tk.Frame):
     # ── Layout ────────────────────────────────────────────────────────────────
     def _build(self):
         # ── input bar ─────────────────────────────────────────────────────────
-        top = tk.Frame(self, bg=BG, pady=8)
+        top = tk.Frame(self, bg=CHROME_BG, pady=8)
         top.pack(fill="x", padx=12)
 
-        tk.Label(top, text="Barcode:", bg=BG,
+        tk.Label(top, text="Barcode:", bg=CHROME_BG, fg=FG_LIGHT,
                  font=("Helvetica", 10)).pack(side="left")
         self._bc_var = tk.StringVar(master=self)
         self._bc_entry = tk.Entry(top, textvariable=self._bc_var, width=22,
@@ -45,7 +48,7 @@ class POSView(tk.Frame):
         styled_button(top, "Add", self._add_by_barcode,
                       bg=BTN_OK).pack(side="left", padx=4)
 
-        tk.Label(top, text="  or  ", bg=BG).pack(side="left")
+        tk.Label(top, text="  or  ", bg=CHROME_BG, fg=FG_LIGHT).pack(side="left")
         self._name_ac = AutocompleteEntry(
             top, width=26,
             on_select=self._on_name_selected,
@@ -55,16 +58,16 @@ class POSView(tk.Frame):
         styled_button(top, "Add by Name",
                       self._add_by_name).pack(side="left", padx=4)
 
-        styled_button(top, "Open Item",
-                      self._add_manual_item).pack(side="left", padx=(12, 4))
+        styled_button(top, "Open Item", self._add_manual_item,
+                      bg=TAB_ACT).pack(side="left", padx=(12, 4))
 
 
         # ── main split ────────────────────────────────────────────────────────
-        split = tk.Frame(self, bg=BG)
+        split = tk.Frame(self, bg=CHROME_BG)
         split.pack(fill="both", expand=True, padx=12, pady=4)
 
         # order table — left
-        left = tk.Frame(split, bg=BG)
+        left = tk.Frame(split, bg=CHROME_BG)
         left.pack(side="left", fill="both", expand=True)
 
         # Column pixel widths (shared by header + every data row)
@@ -267,14 +270,14 @@ class POSView(tk.Frame):
         """Prompts for an open-item name + price. Returns dict or None if cancelled."""
         result = [None]
 
-        dlg = tk.Toplevel(self, bg=BG)
+        dlg = tk.Toplevel(self, bg=CHROME_BG)
         dlg.title("Open Item")
         dlg.resizable(False, False)
         dlg.grab_set()
 
         pad = {"padx": 24}
 
-        tk.Label(dlg, text="Item name:", bg=BG,
+        tk.Label(dlg, text="Item name:", bg=CHROME_BG, fg=FG_LIGHT,
                  font=("Helvetica", 10)).pack(anchor="w", pady=(20, 2), **pad)
         name_var = tk.StringVar(master=dlg)
         name_entry = tk.Entry(dlg, textvariable=name_var, width=28,
@@ -282,7 +285,7 @@ class POSView(tk.Frame):
         name_entry.pack(anchor="w", **pad)
 
         sym = config.CURRENCY_SYMBOL
-        tk.Label(dlg, text=f"Price ({sym}):", bg=BG,
+        tk.Label(dlg, text=f"Price ({sym}):", bg=CHROME_BG, fg=FG_LIGHT,
                  font=("Helvetica", 10)).pack(anchor="w", pady=(12, 2), **pad)
         price_var = tk.StringVar(master=dlg)
         price_entry = tk.Entry(dlg, textvariable=price_var, width=12,
@@ -308,7 +311,7 @@ class POSView(tk.Frame):
         def _cancel():
             dlg.destroy()
 
-        btn_row = tk.Frame(dlg, bg=BG)
+        btn_row = tk.Frame(dlg, bg=CHROME_BG)
         btn_row.pack(pady=(20, 16), **pad)
         styled_button(btn_row, "Cancel", _cancel).pack(side="left", padx=(0, 8))
         styled_button(btn_row, "Add Item", _confirm, bg=BTN_OK).pack(side="left")
@@ -446,7 +449,7 @@ class POSView(tk.Frame):
         users = user_model.get_all()
         result = [None]
 
-        dlg = tk.Toplevel(self, bg=BG)
+        dlg = tk.Toplevel(self, bg=CHROME_BG)
         dlg.title("Complete Order")
         dlg.resizable(False, False)
         dlg.grab_set()
@@ -456,7 +459,7 @@ class POSView(tk.Frame):
         # Processed by (only if users exist)
         user_var = tk.StringVar()
         if users:
-            tk.Label(dlg, text="Processed by:", bg=BG,
+            tk.Label(dlg, text="Processed by:", bg=CHROME_BG, fg=FG_LIGHT,
                      font=("Helvetica", 10)).pack(anchor="w", pady=(20, 2), **pad)
             names   = [u["name"] for u in users]
             default = self._last_processed_by if self._last_processed_by in names else names[0]
@@ -466,22 +469,22 @@ class POSView(tk.Frame):
                          width=26).pack(anchor="w", **pad)
 
         # Payment method
-        tk.Label(dlg, text="Payment method:", bg=BG,
+        tk.Label(dlg, text="Payment method:", bg=CHROME_BG, fg=FG_LIGHT,
                  font=("Helvetica", 10)).pack(anchor="w", pady=(16, 6), **pad)
 
         method_var = tk.StringVar(value="cash")
         methods = [("Cash", "cash"), ("Card", "card"),
                    ("Check", "check"), ("Gift", "gift")]
 
-        btn_frame = tk.Frame(dlg, bg=BG)
+        btn_frame = tk.Frame(dlg, bg=CHROME_BG)
         btn_frame.pack(anchor="w", **pad)
         method_btns: dict[str, tk.Button] = {}
 
         # Container always occupies its position; name_frame toggled inside it
-        name_container = tk.Frame(dlg, bg=BG)
+        name_container = tk.Frame(dlg, bg=CHROME_BG)
         name_container.pack(anchor="w", fill="x", **pad)
-        name_frame = tk.Frame(name_container, bg=BG)
-        tk.Label(name_frame, text="Recipient name:", bg=BG,
+        name_frame = tk.Frame(name_container, bg=CHROME_BG)
+        tk.Label(name_frame, text="Recipient name:", bg=CHROME_BG, fg=FG_LIGHT,
                  font=("Helvetica", 10)).pack(anchor="w", pady=(12, 2))
         customer_var = tk.StringVar()
         tk.Entry(name_frame, textvariable=customer_var, width=28,
@@ -507,7 +510,7 @@ class POSView(tk.Frame):
         _select_method("cash")
 
         # Buttons
-        btn_row = tk.Frame(dlg, bg=BG)
+        btn_row = tk.Frame(dlg, bg=CHROME_BG)
         btn_row.pack(pady=(20, 16), **pad)
 
         def _confirm():
