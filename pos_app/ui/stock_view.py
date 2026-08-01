@@ -7,7 +7,7 @@ from models import product as product_model
 from services import barcode_service, receipt_service
 from ui.theme import (
     BG, BTN_BG, BTN_FG, BTN_DNG, BTN_OK, BORDER, HEADER_BG, HEADER_FG, FG_MUTED,
-    TROW_ALT, TROW_LOW, TROW_WARN, NAV_ACT,
+    TROW_ALT, TROW_LOW, TROW_WARN, TROW_INSTOCK, NAV_ACT,
     styled_button, insert_rows, Pager,
 )
 
@@ -175,6 +175,7 @@ class ProductDialog(tk.Toplevel):
         self.resizable(False, False)
         self.configure(bg=BG)
         self.result: dict | None = None
+        self.duplicate: bool = False
         self._data = data or {}
         self._build()
         self.grab_set()
@@ -217,12 +218,16 @@ class ProductDialog(tk.Toplevel):
         row_btn.grid(row=9, column=0, columnspan=2, pady=12)
         styled_button(row_btn, "Save",   self._save,   bg=BTN_OK).pack(side="left", padx=6)
         styled_button(row_btn, "Cancel", self.destroy, bg=BTN_DNG).pack(side="left", padx=6)
+        if d.get("id") is not None:
+            styled_button(row_btn, "Duplicate", self._duplicate,
+                         bg="#8E44AD", fg="#1C1C1C").pack(side="left", padx=6)
 
-    def _save(self):
+    def _collect_fields(self) -> dict | None:
+        """Validate the form and return the field dict, or None (with an error shown) if invalid."""
         title = self._f_title.get().strip()
         if not title:
             messagebox.showerror("Validation", "Title is required.", parent=self)
-            return
+            return None
         try:
             stock = int(self._f_stock.get())
             if stock < 0:
@@ -230,7 +235,7 @@ class ProductDialog(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Validation", "Stock must be a non-negative integer.",
                                  parent=self)
-            return
+            return None
         try:
             price = float(self._f_price.get())
             if price < 0:
@@ -238,7 +243,7 @@ class ProductDialog(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Validation", "Price must be a non-negative number.",
                                  parent=self)
-            return
+            return None
         storage_raw = self._f_storage.get().strip()
         storage = None
         if storage_raw:
@@ -247,8 +252,8 @@ class ProductDialog(tk.Toplevel):
             except ValueError:
                 messagebox.showerror("Validation", "Storage must be a whole number.",
                                      parent=self)
-                return
-        self.result = {
+                return None
+        return {
             "title":     title,
             "author":    self._f_author.get().strip(),
             "publisher": self._f_publisher.get().strip(),
@@ -258,6 +263,26 @@ class ProductDialog(tk.Toplevel):
             "stock":     stock,
             "price":     price,
         }
+
+    def _save(self):
+        fields = self._collect_fields()
+        if fields is None:
+            return
+        self.result = fields
+        self.destroy()
+
+    def _duplicate(self):
+        fields = self._collect_fields()
+        if fields is None:
+            return
+        if not messagebox.askyesno(
+            "Duplicate Product",
+            f'Create a new product as a copy of "{fields["title"]}"?',
+            parent=self,
+        ):
+            return
+        self.result = fields
+        self.duplicate = True
         self.destroy()
 
 
@@ -271,6 +296,7 @@ class StockView(tk.Frame):
         self._filter_btns:  dict[str, tk.Button] = {}
         self._col_filters:  dict[str, set | None] = {}   # None = no filter active
         self._popup: tk.Toplevel | None = None
+        self._storage_overlays: list[tk.Label] = []
         self._build()
         self.on_show()
 
@@ -345,12 +371,17 @@ class StockView(tk.Frame):
         self._tv.tag_configure("warn", background=TROW_WARN, foreground="white")
 
         vsb = ttk.Scrollbar(tv_wrap, orient="vertical", command=self._tv.yview)
-        self._tv.configure(yscrollcommand=vsb.set)
+
+        def _on_yscroll(*args):
+            vsb.set(*args)
+            self._place_storage_overlays()
+
+        self._tv.configure(yscrollcommand=_on_yscroll)
         self._tv.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
 
         self._tv.bind("<Double-1>", lambda e: self._edit())
-        self._tv.bind("<Configure>", lambda e: self.after_idle(self._place_overlay))
+        self._tv.bind("<Configure>", lambda e: self.after_idle(self._sync_layout))
 
         # Pager
         self._pager = Pager(self, config.PAGE_SIZE, self._refresh)
@@ -390,6 +421,45 @@ class StockView(tk.Frame):
         except tk.TclError:
             pass
 
+    def _sync_layout(self):
+        self._place_overlay()
+        self._place_storage_overlays()
+
+    def _place_storage_overlays(self):
+        """Paint a green background behind the Storage cell of any row with storage > 0.
+
+        ttk.Treeview only supports whole-row background tags, so a true
+        per-cell color needs a Label placed directly over that cell's bbox
+        (the standard Tk recipe for inline-editing a Treeview cell, reused
+        here just for coloring instead of editing).
+        """
+        try:
+            self._tv.update_idletasks()
+            used = 0
+            for item in self._tv.get_children():
+                try:
+                    storage_val = int(self._tv.set(item, "Storage"))
+                except ValueError:
+                    continue
+                if storage_val <= 0:
+                    continue
+                bbox = self._tv.bbox(item, "Storage")
+                if not bbox:
+                    continue
+                x, y, w, h = bbox
+                if used < len(self._storage_overlays):
+                    lbl = self._storage_overlays[used]
+                else:
+                    lbl = tk.Label(self._tv, bg=TROW_INSTOCK, font=("Helvetica", 10))
+                    self._storage_overlays.append(lbl)
+                lbl.config(text=str(storage_val))
+                lbl.place(x=x, y=y, width=w, height=h)
+                used += 1
+            for lbl in self._storage_overlays[used:]:
+                lbl.place_forget()
+        except tk.TclError:
+            pass
+
     def _restore_filter_btn_bg(self, btn: tk.Button):
         col = next((c for c, b in self._filter_btns.items() if b is btn), None)
         active = col is not None and self._col_filters.get(col) is not None
@@ -409,7 +479,7 @@ class StockView(tk.Frame):
     # ── Data refresh ──────────────────────────────────────────────────────────
     def on_show(self):
         self._refresh()
-        self.after(50, self._place_overlay)
+        self.after(50, self._sync_layout)
 
     def _on_search(self, *_):
         self._pager.reset()
@@ -458,6 +528,7 @@ class StockView(tk.Frame):
                       if page_start <= i < page_start + self._pager.page_size}
         insert_rows(self._tv, page_rows, warn_indices=page_warns)
         self._on_selection()
+        self.after_idle(self._place_storage_overlays)
 
     # ── Column filter helpers ─────────────────────────────────────────────────
     def _product_col_value(self, p: dict, col: str) -> str:
@@ -604,12 +675,20 @@ class StockView(tk.Frame):
         self.wait_window(dlg)
         if dlg.result:
             r = dlg.result
-            product_model.update(
-                p["id"], r["title"], r["stock"], r["price"],
-                author=r["author"], publisher=r["publisher"],
-                webstore=r["webstore"], location=r["location"],
-                storage=r["storage"],
-            )
+            if dlg.duplicate:
+                product_model.create(
+                    r["title"], r["stock"], r["price"],
+                    author=r["author"], publisher=r["publisher"],
+                    webstore=r["webstore"], location=r["location"],
+                    storage=r["storage"],
+                )
+            else:
+                product_model.update(
+                    p["id"], r["title"], r["stock"], r["price"],
+                    author=r["author"], publisher=r["publisher"],
+                    webstore=r["webstore"], location=r["location"],
+                    storage=r["storage"],
+                )
             self._refresh()
 
     def _delete(self):

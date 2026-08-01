@@ -335,20 +335,22 @@ def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
 
     width      = _ZPL_WIDTH_DOTS
     max_name_w = width - _MARGIN_X * 2
-    img  = Image.new("L", (width, 4000), 255)   # generous height; cropped to content below
-    draw = ImageDraw.Draw(img)
+
+    # Measuring surface — draw.textlength only reads font metrics, so its
+    # backing image size is irrelevant; used for both passes below.
+    measure_draw = ImageDraw.Draw(Image.new("L", (1, 1), 255))
 
     def fit_name(name: str, fnt, max_w: int) -> list[str]:
         """Pixel-accurate 2-line fit, mirroring _fit_name_px but for a PIL font."""
         upper = name.upper().strip()
         if not upper:
             return [""]
-        if draw.textlength(upper, font=fnt) <= max_w:
+        if measure_draw.textlength(upper, font=fnt) <= max_w:
             return [upper]
         words = upper.split()
         line1: list[str] = []
         for word in words:
-            if draw.textlength(" ".join(line1 + [word]), font=fnt) <= max_w:
+            if measure_draw.textlength(" ".join(line1 + [word]), font=fnt) <= max_w:
                 line1.append(word)
             else:
                 break
@@ -356,20 +358,41 @@ def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
         l2 = " ".join(words[len(line1):])
         if not l1:
             for i in range(len(upper) - 1, 0, -1):
-                if draw.textlength(upper[:i] + "...", font=fnt) <= max_w:
+                if measure_draw.textlength(upper[:i] + "...", font=fnt) <= max_w:
                     return [upper[:i] + "..."]
             return ["..."]
         if not l2:
             return [l1]
-        if draw.textlength(l2, font=fnt) <= max_w:
+        if measure_draw.textlength(l2, font=fnt) <= max_w:
             return [l1, l2]
         for i in range(len(l2) - 1, 0, -1):
-            if draw.textlength(l2[:i] + "...", font=fnt) <= max_w:
+            if measure_draw.textlength(l2[:i] + "...", font=fnt) <= max_w:
                 return [l1, l2[:i] + "..."]
         return [l1, "..."]
 
+    # Pass 1: measure exact content height (item-name wrap included) instead
+    # of guessing via a fixed canvas — a too-small guess let PIL's crop pad
+    # the overflow with solid black across the full width (a big order's
+    # receipt would print a black bar from wherever the guess ran out).
     y = 20 + _TOP_GAP
+    for instr in content:
+        if isinstance(instr, Center) or isinstance(instr, Pair):
+            y += pitch_px[instr.size]
+        elif isinstance(instr, Rule):
+            thick = 2 if instr.thick else 1
+            y = y + thick + _SEP_Y_PAD * 2
+        elif isinstance(instr, Gap):
+            y += _TOTAL_GAP
+        elif isinstance(instr, ItemLine):
+            fnt = get_font("body", False)
+            y += _LINE_H * (len(fit_name(instr.name, fnt, max_name_w)) + 1)
+    label_height = y + 20 + _BOTTOM_GAP   # bottom margin + bottom gap
 
+    img  = Image.new("L", (width, label_height), 255)
+    draw = ImageDraw.Draw(img)
+
+    # Pass 2: draw.
+    y = 20 + _TOP_GAP
     for instr in content:
         if isinstance(instr, Center):
             fnt = get_font(instr.size, instr.bold)
@@ -400,9 +423,7 @@ def _build_receipt_zpl_image(order: dict, items: list[dict]) -> str:
             draw.text((width - _MARGIN_X - rw, y), right, font=fnt, fill=0)
             y += _LINE_H
 
-    label_height = y + 20 + _BOTTOM_GAP   # bottom margin + bottom gap
-    cropped = img.crop((0, 0, width, label_height))
-    gf_cmd, gw, gh = image_to_zpl_gf(cropped)
+    gf_cmd, gw, gh = image_to_zpl_gf(img)
 
     header = (
         "^XA\n"
