@@ -1,8 +1,9 @@
-"""Import / Export page — xlsx only, column mapping via import_export_config.json."""
+"""Import / Export page — xlsx product import/export, plus full-database backup/restore."""
 import json
 import os
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox
 
 import config
@@ -33,6 +34,8 @@ class ImportExportView(tk.Frame):
         self._build_import_section(outer)
         tk.Frame(outer, bg="#CCCCCC", height=1).pack(fill="x", pady=24)
         self._build_export_section(outer)
+        tk.Frame(outer, bg="#CCCCCC", height=1).pack(fill="x", pady=24)
+        self._build_db_section(outer)
 
         # Log area
         tk.Label(outer, text="Log", bg=BG,
@@ -98,6 +101,30 @@ class ImportExportView(tk.Frame):
         self._export_status = tk.Label(parent, text="", bg=BG,
                                         font=("Helvetica", 9), fg=FG_MUTED)
         self._export_status.pack(anchor="w", pady=(6, 0))
+
+    def _build_db_section(self, parent):
+        tk.Label(parent, text="Backup / Restore Full Database", bg=BG,
+                 font=("Helvetica", 13, "bold")).pack(anchor="w")
+        tk.Label(parent,
+                 text="Backs up or restores the entire app database — products, "
+                      "order history, and users — as a single .db file",
+                 bg=BG, font=("Helvetica", 9), fg=FG_MUTED).pack(anchor="w", pady=(0, 10))
+
+        btn_row = tk.Frame(parent, bg=BG)
+        btn_row.pack(anchor="w")
+        styled_button(btn_row, "Backup Database…", self._run_export_db,
+                     bg=BTN_OK).pack(side="left", padx=(0, 8))
+        self._import_db_btn = styled_button(btn_row, "Restore Database…",
+                                            self._run_import_db, bg=BTN_DNG)
+        self._import_db_btn.pack(side="left")
+
+        tk.Label(parent, text="⚠ Restoring replaces ALL current app data and requires "
+                              "restarting APA@POS afterward",
+                 bg=BG, font=("Helvetica", 9), fg="#C0392B").pack(anchor="w", pady=(6, 0))
+
+        self._db_status = tk.Label(parent, text="", bg=BG,
+                                    font=("Helvetica", 9), fg=FG_MUTED)
+        self._db_status.pack(anchor="w", pady=(6, 0))
 
     # ── Import ────────────────────────────────────────────────────────────────
 
@@ -305,6 +332,124 @@ class ImportExportView(tk.Frame):
         msg = f"Exported {len(products)} products to {os.path.basename(path)}"
         self._export_status.config(text=msg, fg="#007000")
         self._log_msg(msg)
+
+    # ── Full database backup / restore ──────────────────────────────────────────
+
+    def _run_export_db(self):
+        path = filedialog.asksaveasfilename(
+            title="Save Database Backup",
+            defaultextension=".db",
+            filetypes=[("SQLite Database", "*.db")],
+            initialfile=f"apa_pos_backup_{datetime.now():%Y%m%d_%H%M%S}.db",
+        )
+        if not path:
+            return
+        try:
+            self._do_export_db(path)
+        except Exception as exc:
+            self._db_status.config(text=f"Error: {exc}", fg="#C00000")
+            self._log_msg(f"Database backup error: {exc}")
+
+    def _do_export_db(self, path: str):
+        """Snapshot the live DB via sqlite3's backup API — this consolidates any
+        pending WAL data into one self-contained file, so the export doesn't
+        need separate -wal/-shm sidecar files to be complete."""
+        import sqlite3
+        from db.database import get_connection
+
+        src = get_connection()
+        dest = sqlite3.connect(path)
+        try:
+            src.backup(dest)
+        finally:
+            dest.close()
+
+        msg = f"Database backed up to {os.path.basename(path)}"
+        self._db_status.config(text=msg, fg="#007000")
+        self._log_msg(msg)
+
+    def _run_import_db(self):
+        path = filedialog.askopenfilename(
+            title="Select Database Backup",
+            filetypes=[("SQLite Database", "*.db"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        if not messagebox.askyesno(
+            "Restore Database",
+            "This will REPLACE the entire app database (all products, order "
+            "history, and users) with the selected backup file.\n\n"
+            "The current database will be archived first, but you must restart "
+            "APA@POS afterward for the change to take effect.\n\nContinue?",
+            parent=self,
+        ):
+            return
+        self._import_db_btn.config(state="disabled")
+        self._db_status.config(text="Restoring…", fg=FG_MUTED)
+        threading.Thread(target=self._do_import_db, args=(path,), daemon=True).start()
+
+    def _do_import_db(self, path: str):
+        import shutil
+        import sqlite3
+        from db.database import close as close_db, get_connection
+
+        had_original  = False
+        archive       = None
+        try:
+            # Validate before touching anything — refuse random/corrupt files.
+            check = sqlite3.connect(path)
+            try:
+                tables = {r[0] for r in check.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if "products" not in tables or "orders" not in tables:
+                    raise ValueError(
+                        "Selected file doesn't look like an APA POS database "
+                        "(missing products/orders tables)."
+                    )
+                check.execute("PRAGMA integrity_check").fetchone()
+            finally:
+                check.close()
+
+            close_db()
+
+            os.makedirs(config.DB_ARCHIVE_DIR, exist_ok=True)
+            ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive = os.path.join(config.DB_ARCHIVE_DIR, f"pos_pre_restore_{ts}.db")
+            had_original = os.path.exists(config.DB_PATH)
+            if had_original:
+                shutil.move(config.DB_PATH, archive)
+            for ext in ("-wal", "-shm"):
+                side = config.DB_PATH + ext
+                if os.path.exists(side):
+                    os.remove(side)
+
+            try:
+                shutil.copy2(path, config.DB_PATH)
+            except Exception:
+                if had_original and archive and os.path.exists(archive):
+                    shutil.move(archive, config.DB_PATH)
+                raise
+
+            self.after(0, self._import_db_done)
+        except Exception as exc:
+            self.after(0, lambda: self._import_db_error(str(exc)))
+        finally:
+            try:
+                get_connection()   # reopen (and migrate) so the app isn't left DB-less
+            except Exception:
+                pass
+
+    def _import_db_done(self):
+        msg = "Database restored. Please restart APA@POS to load the new data."
+        self._db_status.config(text=msg, fg="#007000")
+        self._import_db_btn.config(state="normal")
+        self._log_msg(msg)
+        messagebox.showinfo("Restore Complete", msg, parent=self)
+
+    def _import_db_error(self, msg: str):
+        self._db_status.config(text=f"Error: {msg}", fg="#C00000")
+        self._import_db_btn.config(state="normal")
+        self._log_msg(f"Database restore error: {msg}")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
