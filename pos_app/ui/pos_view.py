@@ -58,7 +58,7 @@ class POSView(tk.Frame):
         styled_button(top, "Add by Name",
                       self._add_by_name).pack(side="left", padx=4)
 
-        styled_button(top, "Open Item", self._add_manual_item,
+        styled_button(top, "Add Extra Item", self._add_manual_item,
                       bg=TAB_ACT).pack(side="left", padx=(12, 4))
 
 
@@ -271,7 +271,7 @@ class POSView(tk.Frame):
         result = [None]
 
         dlg = tk.Toplevel(self, bg=CHROME_BG)
-        dlg.title("Open Item")
+        dlg.title("Add Extra Item")
         dlg.resizable(False, False)
         dlg.grab_set()
 
