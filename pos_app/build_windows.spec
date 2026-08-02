@@ -24,6 +24,7 @@ a = Analysis(
     datas=[
         ('assets/logo.png',            'assets'),
         ('assets/apa-app-logo.png',    'assets'),
+        ('assets/apa-app-logo.ico',    'assets'),
         ('db/schema.sql',              'db'),
         ('import_export_config.json',  '.'),
     ],

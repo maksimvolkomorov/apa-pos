@@ -75,6 +75,14 @@ class App(tk.Tk):
         self.report_callback_exception = handler
 
     def _set_icon(self):
+        # Windows taskbar buttons don't reliably pick up iconphoto() — use the
+        # multi-resolution .ico so both the title bar and taskbar match.
+        if sys.platform == "win32":
+            ico_path = os.path.join(config._BUNDLED, "assets", "apa-app-logo.ico")
+            if os.path.exists(ico_path):
+                self.iconbitmap(default=ico_path)
+                return
+
         logo_path = os.path.join(config._BUNDLED, "assets", "apa-app-logo.png")
         if os.path.exists(logo_path):
             self._icon_img = tk.PhotoImage(file=logo_path)
@@ -110,10 +118,6 @@ class App(tk.Tk):
         nav = tk.Frame(self, bg=NAV_BG, height=92)
         nav.pack(fill="x")
         nav.pack_propagate(False)
-
-        tk.Label(nav, text="  APA@POS",
-                 bg=NAV_BG, fg=FG_LIGHT,
-                 font=("Helvetica", 13, "bold")).pack(side="left", padx=8)
 
         self._tab_btns: list[tk.Button] = []
         for i, (label, _) in enumerate(self.TABS):

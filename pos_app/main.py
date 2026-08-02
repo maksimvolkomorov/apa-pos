@@ -14,6 +14,14 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+    # Give this process its own identity so the taskbar button uses our icon
+    # (set via iconbitmap in ui/app.py) instead of python.exe's own icon.
+    # Must run before any window is created.
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("StHermanMonastery.APAPOS")
+    except Exception:
+        pass
+
 # ── Single-instance guard (Windows named mutex) ───────────────────────────────
 _mutex = None
 if sys.platform == "win32":
